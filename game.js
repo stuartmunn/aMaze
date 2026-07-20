@@ -23,6 +23,7 @@ const state = {
   displayPlayer: { x: 0, y: 0 }, // animated position (can be mid-cell) — used for rendering only
   exit: { x: 0, y: 0 },
   fogRadius: null,
+  animating: false, // true while a corridor-run slide is in progress — blocks new input
 };
 
 // ---------------------------------------------------------------------------
@@ -271,19 +272,23 @@ function animatePath(path, index, onDone) {
 
 function handleKeyDown(event) {
   const move = KEY_MOVES[event.key];
-  if (!move) return;
+  if (!move || state.animating) return;
 
   event.preventDefault(); // stop the page scrolling on arrow keys
 
   const path = computeMovePath(move.dx, move.dy, move.wall);
   if (path.length <= 1) return; // blocked immediately — nothing to animate
 
-  window.removeEventListener('keydown', handleKeyDown); // block input mid-slide
+  state.animating = true;
   animatePath(path, 0, () => {
-    window.addEventListener('keydown', handleKeyDown);
-
-    if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
-      onLevelComplete();
+    // finally guarantees the flag clears even if onLevelComplete throws,
+    // so a broken level transition can't permanently lock out input.
+    try {
+      if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
+        onLevelComplete();
+      }
+    } finally {
+      state.animating = false;
     }
   });
 }
