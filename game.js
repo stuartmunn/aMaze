@@ -109,8 +109,52 @@ function isVisible(x, y) {
   return Math.max(Math.abs(x - displayPlayer.x), Math.abs(y - displayPlayer.y)) <= state.fogRadius;
 }
 
+// Masonry shades for wall blocks — picked deterministically per block (from
+// cell coords + side + block index) so the texture is stable across redraws
+// rather than flickering during the corridor-run slide animation.
+const STONE_SHADES = ['#9a9aa2', '#86868f', '#72727b', '#5e5e66'];
+const STONE_BLOCKS_PER_EDGE = 3;
+const MORTAR_GAP_RATIO = 0.12; // fraction of block length left as a mortar gap
+
+function stoneShade(seed) {
+  return STONE_SHADES[((seed % STONE_SHADES.length) + STONE_SHADES.length) % STONE_SHADES.length];
+}
+
+// Draws one wall edge as a row of stone blocks with mortar gaps between them
+// and a dark offset "shadow" stroke beneath each block for a bit of depth.
+function drawStoneEdge(x1, y1, x2, y2, seedBase) {
+  const dx = (x2 - x1) / STONE_BLOCKS_PER_EDGE;
+  const dy = (y2 - y1) / STONE_BLOCKS_PER_EDGE;
+  const len = Math.hypot(dx, dy) || 1;
+  const gap = len * MORTAR_GAP_RATIO;
+  const ux = dx / len;
+  const uy = dy / len;
+
+  for (let i = 0; i < STONE_BLOCKS_PER_EDGE; i++) {
+    const sx = x1 + dx * i + ux * gap;
+    const sy = y1 + dy * i + uy * gap;
+    const ex = x1 + dx * (i + 1) - ux * gap;
+    const ey = y1 + dy * (i + 1) - uy * gap;
+
+    ctx.strokeStyle = '#33333d';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(sx + 1, sy + 1);
+    ctx.lineTo(ex + 1, ey + 1);
+    ctx.stroke();
+
+    ctx.strokeStyle = stoneShade(seedBase + i);
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+  }
+}
+
 function drawWalls() {
   const { grid, cols, rows, cellSize } = state;
+  ctx.lineCap = 'butt'; // square block ends, not rounded
 
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
@@ -123,50 +167,71 @@ function drawWalls() {
         continue;
       }
 
-      const cell = grid[y][x];
-      ctx.strokeStyle = '#e0e0e0';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
+      ctx.fillStyle = '#232330'; // flagstone floor tint
+      ctx.fillRect(px, py, cellSize, cellSize);
 
-      ctx.beginPath();
-      if (cell.walls & WALL.TOP) {
-        ctx.moveTo(px, py);
-        ctx.lineTo(px + cellSize, py);
-      }
-      if (cell.walls & WALL.RIGHT) {
-        ctx.moveTo(px + cellSize, py);
-        ctx.lineTo(px + cellSize, py + cellSize);
-      }
-      if (cell.walls & WALL.BOTTOM) {
-        ctx.moveTo(px, py + cellSize);
-        ctx.lineTo(px + cellSize, py + cellSize);
-      }
-      if (cell.walls & WALL.LEFT) {
-        ctx.moveTo(px, py);
-        ctx.lineTo(px, py + cellSize);
-      }
-      ctx.stroke();
+      const cell = grid[y][x];
+      const seedBase = x * 31 + y * 17;
+
+      if (cell.walls & WALL.TOP) drawStoneEdge(px, py, px + cellSize, py, seedBase + WALL.TOP * 7);
+      if (cell.walls & WALL.RIGHT) drawStoneEdge(px + cellSize, py, px + cellSize, py + cellSize, seedBase + WALL.RIGHT * 7);
+      if (cell.walls & WALL.BOTTOM) drawStoneEdge(px, py + cellSize, px + cellSize, py + cellSize, seedBase + WALL.BOTTOM * 7);
+      if (cell.walls & WALL.LEFT) drawStoneEdge(px, py, px, py + cellSize, seedBase + WALL.LEFT * 7);
     }
   }
 }
+
+// Steps shrink and darken toward the centre, giving a "receding downward"
+// look for a top-down stairway.
+const STAIR_STEP_SHADES = ['#a8a8a8', '#87877e', '#666660', '#454542', '#242220'];
 
 function drawExit() {
   const { exit, cellSize } = state;
   const cx = exit.x * cellSize + cellSize / 2;
   const cy = exit.y * cellSize + cellSize / 2;
+  const steps = STAIR_STEP_SHADES.length;
+  const maxSize = cellSize * 0.7;
 
-  ctx.fillStyle = '#4ade80';
-  ctx.fillRect(cx - cellSize * 0.3, cy - cellSize * 0.3, cellSize * 0.6, cellSize * 0.6);
+  for (let i = 0; i < steps; i++) {
+    const size = maxSize * (1 - i / steps);
+    ctx.fillStyle = STAIR_STEP_SHADES[i];
+    ctx.fillRect(cx - size / 2, cy - size / 2, size, size * 0.6);
+  }
 }
 
 function drawPlayer() {
   const { displayPlayer, cellSize } = state;
   const cx = displayPlayer.x * cellSize + cellSize / 2;
   const cy = displayPlayer.y * cellSize + cellSize / 2;
+  const s = cellSize * 0.3; // base scale, matches the old circle's radius
 
-  ctx.fillStyle = '#f472b6';
+  // Robe: a rounded triangle-ish body tapering from shoulders to feet.
+  ctx.fillStyle = '#7c5cff';
   ctx.beginPath();
-  ctx.arc(cx, cy, cellSize * 0.3, 0, Math.PI * 2);
+  ctx.moveTo(cx, cy - s * 0.1);
+  ctx.lineTo(cx - s * 0.75, cy + s);
+  ctx.quadraticCurveTo(cx, cy + s * 1.2, cx + s * 0.75, cy + s);
+  ctx.closePath();
+  ctx.fill();
+
+  // Head.
+  ctx.fillStyle = '#f2c9a0';
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.35, s * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pointed wizard hat, with a star trim near the brim.
+  ctx.fillStyle = '#7c5cff';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s * 1.5);
+  ctx.lineTo(cx - s * 0.55, cy - s * 0.25);
+  ctx.lineTo(cx + s * 0.55, cy - s * 0.25);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#f4d35e';
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.6, s * 0.1, 0, Math.PI * 2);
   ctx.fill();
 }
 
