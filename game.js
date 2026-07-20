@@ -190,6 +190,21 @@ function handleKeyDown(event) {
   event.preventDefault(); // stop the page scrolling on arrow keys
   tryMovePlayer(move.dx, move.dy, move.wall);
   render();
+
+  if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
+    onLevelComplete();
+  }
+}
+
+function onLevelComplete() {
+  levelDisplay.textContent = `Level ${state.level} complete!`;
+  window.removeEventListener('keydown', handleKeyDown); // pause input during the flash
+
+  setTimeout(() => {
+    startLevel(state.level + 1);
+    render();
+    window.addEventListener('keydown', handleKeyDown);
+  }, 800);
 }
 
 window.addEventListener('keydown', handleKeyDown);
@@ -198,10 +213,13 @@ window.addEventListener('keydown', handleKeyDown);
 // Boot
 // ---------------------------------------------------------------------------
 
+const STARTING_SIZE = 8;
+const SIZE_GROWTH_PER_LEVEL = 2;
+
 function startLevel(level) {
   state.level = level;
-  state.cols = 8;
-  state.rows = 8;
+  state.cols = STARTING_SIZE + (level - 1) * SIZE_GROWTH_PER_LEVEL;
+  state.rows = STARTING_SIZE + (level - 1) * SIZE_GROWTH_PER_LEVEL;
   state.grid = generateMaze(state.cols, state.rows);
   state.player = { x: 0, y: 0 }; // fixed start: top-left
   state.exit = { x: state.cols - 1, y: state.rows - 1 }; // opposite corner
