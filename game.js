@@ -195,15 +195,37 @@ const KEY_MOVES = {
   ArrowLeft: { dx: -1, dy: 0, wall: WALL.LEFT },
 };
 
-function tryMovePlayer(dx, dy, wall) {
-  const { player, grid } = state;
-  const cell = grid[player.y][player.x];
+// The two walls at right angles to a given direction of travel — used to
+// spot side passages so a run can stop at a junction.
+const PERPENDICULAR = {
+  [WALL.TOP]: [WALL.LEFT, WALL.RIGHT],
+  [WALL.BOTTOM]: [WALL.LEFT, WALL.RIGHT],
+  [WALL.LEFT]: [WALL.TOP, WALL.BOTTOM],
+  [WALL.RIGHT]: [WALL.TOP, WALL.BOTTOM],
+};
 
-  // Blocked if the wall on that side hasn't been carved away.
-  if (cell.walls & wall) return;
+/**
+ * Slides the player along (dx, dy) one cell at a time until they can't go
+ * any further — either a wall blocks the way ahead, or the cell they've
+ * just entered has a side passage open (a choice), at which point control
+ * is handed back so the player can pick a direction themselves.
+ */
+function movePlayerInDirection(dx, dy, wall) {
+  const { player, grid, exit } = state;
+  const perpWalls = PERPENDICULAR[wall];
 
-  player.x += dx;
-  player.y += dy;
+  while (true) {
+    const cell = grid[player.y][player.x];
+    if (cell.walls & wall) break; // wall ahead — stop
+
+    player.x += dx;
+    player.y += dy;
+
+    if (player.x === exit.x && player.y === exit.y) break; // stop at exit
+
+    const nextCell = grid[player.y][player.x];
+    if (perpWalls.some((w) => !(nextCell.walls & w))) break; // junction — let player choose
+  }
 }
 
 function handleKeyDown(event) {
@@ -211,7 +233,7 @@ function handleKeyDown(event) {
   if (!move) return;
 
   event.preventDefault(); // stop the page scrolling on arrow keys
-  tryMovePlayer(move.dx, move.dy, move.wall);
+  movePlayerInDirection(move.dx, move.dy, move.wall);
   render();
 
   if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
