@@ -11,9 +11,19 @@
     <h1>aMaze</h1>
     <div class="hud">
       <span id="level-display">Level 1</span>
+      <div class="health-bar">
+        <div id="health-fill"></div>
+        <span id="health-text">100</span>
+      </div>
     </div>
     <canvas id="maze-canvas"></canvas>
   </main>
+  <div id="game-over-overlay" class="hidden">
+    <div class="game-over-box">
+      <h2>Game Over</h2>
+      <button id="restart-btn">Restart</button>
+    </div>
+  </div>
   <script src="game.js"></script>
 </body>
 </html>
