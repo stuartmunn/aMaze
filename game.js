@@ -19,9 +19,11 @@ const state = {
   cols: 0,
   rows: 0,
   cellSize: 0,
-  player: { x: 0, y: 0 },
+  player: { x: 0, y: 0 }, // logical cell — authoritative for movement/win checks
+  displayPlayer: { x: 0, y: 0 }, // animated position (can be mid-cell) — used for rendering only
   exit: { x: 0, y: 0 },
   fogRadius: null,
+  animating: false, // true while a corridor-run slide is in progress — blocks new input
 };
 
 // ---------------------------------------------------------------------------
@@ -103,8 +105,8 @@ function getFogRadius(level) {
 
 function isVisible(x, y) {
   if (state.fogRadius === null) return true;
-  const { player } = state;
-  return Math.max(Math.abs(x - player.x), Math.abs(y - player.y)) <= state.fogRadius;
+  const { displayPlayer } = state;
+  return Math.max(Math.abs(x - displayPlayer.x), Math.abs(y - displayPlayer.y)) <= state.fogRadius;
 }
 
 function drawWalls() {
@@ -158,9 +160,9 @@ function drawExit() {
 }
 
 function drawPlayer() {
-  const { player, cellSize } = state;
-  const cx = player.x * cellSize + cellSize / 2;
-  const cy = player.y * cellSize + cellSize / 2;
+  const { displayPlayer, cellSize } = state;
+  const cx = displayPlayer.x * cellSize + cellSize / 2;
+  const cy = displayPlayer.y * cellSize + cellSize / 2;
 
   ctx.fillStyle = '#f472b6';
   ctx.beginPath();
@@ -195,28 +197,100 @@ const KEY_MOVES = {
   ArrowLeft: { dx: -1, dy: 0, wall: WALL.LEFT },
 };
 
-function tryMovePlayer(dx, dy, wall) {
-  const { player, grid } = state;
-  const cell = grid[player.y][player.x];
+// The two walls at right angles to a given direction of travel — used to
+// spot side passages so a run can stop at a junction.
+const PERPENDICULAR = {
+  [WALL.TOP]: [WALL.LEFT, WALL.RIGHT],
+  [WALL.BOTTOM]: [WALL.LEFT, WALL.RIGHT],
+  [WALL.LEFT]: [WALL.TOP, WALL.BOTTOM],
+  [WALL.RIGHT]: [WALL.TOP, WALL.BOTTOM],
+};
 
-  // Blocked if the wall on that side hasn't been carved away.
-  if (cell.walls & wall) return;
+/**
+ * Works out the run along (dx, dy) one cell at a time until the player
+ * can't go any further — either a wall blocks the way ahead, or the cell
+ * just entered has a side passage open (a choice) — and returns every cell
+ * stepped through, start included, for the caller to animate along.
+ * Updates state.player (the logical position) to the final cell.
+ */
+function computeMovePath(dx, dy, wall) {
+  const { grid, exit } = state;
+  const perpWalls = PERPENDICULAR[wall];
+  let x = state.player.x;
+  let y = state.player.y;
+  const path = [{ x, y }];
 
-  player.x += dx;
-  player.y += dy;
+  while (true) {
+    const cell = grid[y][x];
+    if (cell.walls & wall) break; // wall ahead — stop
+
+    x += dx;
+    y += dy;
+    path.push({ x, y });
+
+    if (x === exit.x && y === exit.y) break; // stop at exit
+
+    const nextCell = grid[y][x];
+    if (perpWalls.some((w) => !(nextCell.walls & w))) break; // junction — let player choose
+  }
+
+  state.player = { x, y };
+  return path;
+}
+
+const MS_PER_CELL = 70; // animation speed for sliding between cells
+
+// Tweens state.displayPlayer from `from` to `to`, redrawing every frame,
+// then calls onComplete. This is what makes a run look like a slide rather
+// than an instant jump.
+function animateSegment(from, to, onComplete) {
+  const start = performance.now();
+
+  function frame(now) {
+    const t = Math.min((now - start) / MS_PER_CELL, 1);
+    state.displayPlayer = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    render();
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      onComplete();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// Walks the animation through each segment of a path in turn, cell by cell.
+function animatePath(path, index, onDone) {
+  if (index >= path.length - 1) {
+    onDone();
+    return;
+  }
+  animateSegment(path[index], path[index + 1], () => animatePath(path, index + 1, onDone));
 }
 
 function handleKeyDown(event) {
   const move = KEY_MOVES[event.key];
-  if (!move) return;
+  if (!move || state.animating) return;
 
   event.preventDefault(); // stop the page scrolling on arrow keys
-  tryMovePlayer(move.dx, move.dy, move.wall);
-  render();
 
-  if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
-    onLevelComplete();
-  }
+  const path = computeMovePath(move.dx, move.dy, move.wall);
+  if (path.length <= 1) return; // blocked immediately — nothing to animate
+
+  state.animating = true;
+  animatePath(path, 0, () => {
+    // finally guarantees the flag clears even if onLevelComplete throws,
+    // so a broken level transition can't permanently lock out input.
+    try {
+      if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
+        onLevelComplete();
+      }
+    } finally {
+      state.animating = false;
+    }
+  });
 }
 
 function onLevelComplete() {
@@ -245,6 +319,7 @@ function startLevel(level) {
   state.rows = STARTING_SIZE + (level - 1) * SIZE_GROWTH_PER_LEVEL;
   state.grid = generateMaze(state.cols, state.rows);
   state.player = { x: 0, y: 0 }; // fixed start: top-left
+  state.displayPlayer = { x: 0, y: 0 };
   state.exit = { x: state.cols - 1, y: state.rows - 1 }; // opposite corner
   state.fogRadius = getFogRadius(level);
 }
