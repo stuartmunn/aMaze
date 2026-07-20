@@ -21,6 +21,7 @@ const state = {
   cellSize: 0,
   player: { x: 0, y: 0 },
   exit: { x: 0, y: 0 },
+  fogRadius: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -90,18 +91,40 @@ function generateMaze(cols, rows) {
 // Rendering
 // ---------------------------------------------------------------------------
 
+// Fog of war: only cells within this many steps (Chebyshev distance) of the
+// player are revealed. null means no fog — everything's visible.
+const FOG_START_LEVEL = 3;
+const FOG_MIN_RADIUS = 3;
+
+function getFogRadius(level) {
+  if (level < FOG_START_LEVEL) return null;
+  return Math.max(FOG_MIN_RADIUS, 8 - (level - FOG_START_LEVEL));
+}
+
+function isVisible(x, y) {
+  if (state.fogRadius === null) return true;
+  const { player } = state;
+  return Math.max(Math.abs(x - player.x), Math.abs(y - player.y)) <= state.fogRadius;
+}
+
 function drawWalls() {
   const { grid, cols, rows, cellSize } = state;
 
-  ctx.strokeStyle = '#e0e0e0';
-  ctx.lineWidth = 2;
-  ctx.lineCap = 'round';
-
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      const cell = grid[y][x];
       const px = x * cellSize;
       const py = y * cellSize;
+
+      if (!isVisible(x, y)) {
+        ctx.fillStyle = '#161622'; // unrevealed cell — solid fog
+        ctx.fillRect(px, py, cellSize, cellSize);
+        continue;
+      }
+
+      const cell = grid[y][x];
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
 
       ctx.beginPath();
       if (cell.walls & WALL.TOP) {
@@ -223,6 +246,7 @@ function startLevel(level) {
   state.grid = generateMaze(state.cols, state.rows);
   state.player = { x: 0, y: 0 }; // fixed start: top-left
   state.exit = { x: state.cols - 1, y: state.rows - 1 }; // opposite corner
+  state.fogRadius = getFogRadius(level);
 }
 
 startLevel(1);
