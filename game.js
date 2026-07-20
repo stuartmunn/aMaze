@@ -162,6 +162,39 @@ function render() {
 }
 
 // ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+
+const KEY_MOVES = {
+  ArrowUp: { dx: 0, dy: -1, wall: WALL.TOP },
+  ArrowRight: { dx: 1, dy: 0, wall: WALL.RIGHT },
+  ArrowDown: { dx: 0, dy: 1, wall: WALL.BOTTOM },
+  ArrowLeft: { dx: -1, dy: 0, wall: WALL.LEFT },
+};
+
+function tryMovePlayer(dx, dy, wall) {
+  const { player, grid } = state;
+  const cell = grid[player.y][player.x];
+
+  // Blocked if the wall on that side hasn't been carved away.
+  if (cell.walls & wall) return;
+
+  player.x += dx;
+  player.y += dy;
+}
+
+function handleKeyDown(event) {
+  const move = KEY_MOVES[event.key];
+  if (!move) return;
+
+  event.preventDefault(); // stop the page scrolling on arrow keys
+  tryMovePlayer(move.dx, move.dy, move.wall);
+  render();
+}
+
+window.addEventListener('keydown', handleKeyDown);
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
