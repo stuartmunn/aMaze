@@ -10,8 +10,21 @@
 const canvas = document.getElementById('maze-canvas');
 const ctx = canvas.getContext('2d');
 const levelDisplay = document.getElementById('level-display');
+const healthFill = document.getElementById('health-fill');
+const healthText = document.getElementById('health-text');
+const gameOverOverlay = document.getElementById('game-over-overlay');
+const restartBtn = document.getElementById('restart-btn');
 
-const MAX_CANVAS_SIZE = 640; // px — grid scales down to fit within this
+const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
+const VIEWPORT_MARGIN = 40; // px — safety margin so the canvas never triggers scroll
+
+// Largest square the canvas can be without pushing the page taller than the
+// viewport (accounting for the heading/HUD above it) or wider than the window.
+function getAvailableCanvasSize() {
+  const availableHeight = window.innerHeight - canvas.getBoundingClientRect().top - VIEWPORT_MARGIN;
+  const availableWidth = window.innerWidth - VIEWPORT_MARGIN;
+  return Math.max(200, Math.min(MAX_CANVAS_SIZE, availableHeight, availableWidth));
+}
 
 const state = {
   level: 1,
@@ -24,6 +37,9 @@ const state = {
   exit: { x: 0, y: 0 },
   fogRadius: null,
   animating: false, // true while a corridor-run slide is in progress — blocks new input
+  health: 100, // persists across levels; only resets on restart after game over
+  traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
+  gameOver: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -89,6 +105,46 @@ function generateMaze(cols, rows) {
   return grid;
 }
 
+const TRAP_MIN_RATIO = 0.1;
+const TRAP_MAX_RATIO = 0.3;
+const TRAP_MIN_DAMAGE = 5;
+const TRAP_MAX_DAMAGE = 20;
+
+// A dead-end is a cell with only one opening (three of its four walls up).
+function findDeadEnds(grid, cols, rows, exit) {
+  const deadEnds = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (x === 0 && y === 0) continue; // start
+      if (x === exit.x && y === exit.y) continue;
+      const walls = grid[y][x].walls;
+      const openings = [WALL.TOP, WALL.RIGHT, WALL.BOTTOM, WALL.LEFT].filter((w) => !(walls & w));
+      if (openings.length === 1) deadEnds.push({ x, y });
+    }
+  }
+  return deadEnds;
+}
+
+// Seeds a random 10-30% (re-rolled per level) of this level's dead-ends with
+// a hidden trap. Traps stay invisible until the player steps on them.
+function placeTraps(grid, cols, rows, exit) {
+  const deadEnds = findDeadEnds(grid, cols, rows, exit);
+  const ratio = TRAP_MIN_RATIO + Math.random() * (TRAP_MAX_RATIO - TRAP_MIN_RATIO);
+  const trapCount = Math.round(deadEnds.length * ratio);
+
+  // Fisher-Yates shuffle, then take the first trapCount cells.
+  for (let i = deadEnds.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deadEnds[i], deadEnds[j]] = [deadEnds[j], deadEnds[i]];
+  }
+
+  const traps = new Map();
+  for (const { x, y } of deadEnds.slice(0, trapCount)) {
+    traps.set(`${x},${y}`, { triggered: false });
+  }
+  return traps;
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -116,8 +172,8 @@ const STONE_SHADES = ['#9a9aa2', '#86868f', '#72727b', '#5e5e66'];
 const STONE_BLOCKS_PER_EDGE = 3;
 const MORTAR_GAP_RATIO = 0.12; // fraction of block length left as a mortar gap
 
-function stoneShade(seed) {
-  return STONE_SHADES[((seed % STONE_SHADES.length) + STONE_SHADES.length) % STONE_SHADES.length];
+function stoneShade(seed, shades = STONE_SHADES) {
+  return shades[((seed % shades.length) + shades.length) % shades.length];
 }
 
 // Draws one wall edge as a row of stone blocks with mortar gaps between them
@@ -152,6 +208,27 @@ function drawStoneEdge(x1, y1, x2, y2, seedBase) {
   }
 }
 
+// Flagstone floor: each cell split into a 2x2 grid of tiles, shaded
+// deterministically (from cell coords) so the pattern is stable across
+// redraws rather than flickering during the corridor-run slide animation.
+const FLAGSTONE_SHADES = ['#262635', '#2b2b3a', '#20202d', '#282838'];
+const FLAGSTONE_GROUT = '#17171f';
+
+function drawFlagstoneFloor(px, py, cellSize, seedBase) {
+  const half = cellSize / 2;
+  const grout = Math.max(1, cellSize * 0.03);
+
+  for (let ty = 0; ty < 2; ty++) {
+    for (let tx = 0; tx < 2; tx++) {
+      ctx.fillStyle = FLAGSTONE_GROUT;
+      ctx.fillRect(px + tx * half, py + ty * half, half, half);
+
+      ctx.fillStyle = stoneShade(seedBase + tx * 5 + ty * 11, FLAGSTONE_SHADES);
+      ctx.fillRect(px + tx * half + grout, py + ty * half + grout, half - grout * 2, half - grout * 2);
+    }
+  }
+}
+
 function drawWalls() {
   const { grid, cols, rows, cellSize } = state;
   ctx.lineCap = 'butt'; // square block ends, not rounded
@@ -167,18 +244,48 @@ function drawWalls() {
         continue;
       }
 
-      ctx.fillStyle = '#232330'; // flagstone floor tint
-      ctx.fillRect(px, py, cellSize, cellSize);
+      const seedBase = x * 31 + y * 17;
+      drawFlagstoneFloor(px, py, cellSize, seedBase);
 
       const cell = grid[y][x];
-      const seedBase = x * 31 + y * 17;
 
       if (cell.walls & WALL.TOP) drawStoneEdge(px, py, px + cellSize, py, seedBase + WALL.TOP * 7);
       if (cell.walls & WALL.RIGHT) drawStoneEdge(px + cellSize, py, px + cellSize, py + cellSize, seedBase + WALL.RIGHT * 7);
       if (cell.walls & WALL.BOTTOM) drawStoneEdge(px, py + cellSize, px + cellSize, py + cellSize, seedBase + WALL.BOTTOM * 7);
       if (cell.walls & WALL.LEFT) drawStoneEdge(px, py, px, py + cellSize, seedBase + WALL.LEFT * 7);
+
+      const trap = state.traps.get(`${x},${y}`);
+      if (trap && trap.triggered) drawExplosion(px, py, cellSize);
     }
   }
+}
+
+// Triggered trap marker: a jagged orange/red burst, drawn once revealed and
+// left in place permanently as a warning.
+function drawExplosion(px, py, cellSize) {
+  const cx = px + cellSize / 2;
+  const cy = py + cellSize / 2;
+  const outer = cellSize * 0.4;
+  const inner = cellSize * 0.18;
+  const points = 8;
+
+  ctx.fillStyle = '#ff6a1f';
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const angle = (Math.PI * i) / points;
+    const x = cx + Math.cos(angle) * r;
+    const y = cy + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath();
+  ctx.arc(cx, cy, cellSize * 0.12, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 // Steps shrink and darken toward the centre, giving a "receding downward"
@@ -240,15 +347,22 @@ function drawPlayer() {
  * this isn't an animation loop, so there's no per-frame redraw.
  */
 function render() {
-  state.cellSize = Math.floor(MAX_CANVAS_SIZE / Math.max(state.cols, state.rows));
+  state.cellSize = Math.floor(getAvailableCanvasSize() / Math.max(state.cols, state.rows));
   canvas.width = state.cellSize * state.cols;
   canvas.height = state.cellSize * state.rows;
   levelDisplay.textContent = `Level ${state.level}`;
+  updateHealthDisplay();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawWalls();
   drawExit();
   drawPlayer();
+}
+
+function updateHealthDisplay() {
+  const health = Math.max(0, state.health);
+  healthFill.style.width = `${health}%`;
+  healthText.textContent = String(health);
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +463,8 @@ function handleKeyDown(event) {
     // finally guarantees the flag clears even if onLevelComplete throws,
     // so a broken level transition can't permanently lock out input.
     try {
+      checkTrap();
+      if (state.gameOver) return;
       if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
         onLevelComplete();
       }
@@ -357,6 +473,42 @@ function handleKeyDown(event) {
     }
   });
 }
+
+// Checks whether the player's current cell holds an untriggered trap; if so,
+// deals random damage, reveals the explosion marker, and ends the game if
+// health runs out.
+function checkTrap() {
+  const key = `${state.player.x},${state.player.y}`;
+  const trap = state.traps.get(key);
+  if (!trap || trap.triggered) return;
+
+  trap.triggered = true;
+  const damage = TRAP_MIN_DAMAGE + Math.floor(Math.random() * (TRAP_MAX_DAMAGE - TRAP_MIN_DAMAGE + 1));
+  state.health = Math.max(0, state.health - damage);
+  updateHealthDisplay();
+
+  if (state.health <= 0) {
+    state.animating = false;
+    onGameOver();
+  }
+}
+
+function onGameOver() {
+  state.gameOver = true;
+  window.removeEventListener('keydown', handleKeyDown);
+  render();
+  gameOverOverlay.classList.remove('hidden');
+}
+
+restartBtn.addEventListener('click', () => {
+  gameOverOverlay.classList.add('hidden');
+  state.health = 100;
+  state.gameOver = false;
+  startLevel(1);
+  render();
+  window.removeEventListener('keydown', handleKeyDown);
+  window.addEventListener('keydown', handleKeyDown);
+});
 
 function onLevelComplete() {
   levelDisplay.textContent = `Level ${state.level} complete!`;
@@ -370,6 +522,7 @@ function onLevelComplete() {
 }
 
 window.addEventListener('keydown', handleKeyDown);
+window.addEventListener('resize', render); // re-fit the canvas if the window is resized
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -387,6 +540,7 @@ function startLevel(level) {
   state.displayPlayer = { x: 0, y: 0 };
   state.exit = { x: state.cols - 1, y: state.rows - 1 }; // opposite corner
   state.fogRadius = getFogRadius(level);
+  state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
 }
 
 startLevel(1);
