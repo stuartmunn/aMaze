@@ -487,7 +487,10 @@ function checkTrap() {
   state.health = Math.max(0, state.health - damage);
   updateHealthDisplay();
 
-  if (state.health <= 0) onGameOver();
+  if (state.health <= 0) {
+    state.animating = false;
+    onGameOver();
+  }
 }
 
 function onGameOver() {
@@ -503,6 +506,7 @@ restartBtn.addEventListener('click', () => {
   state.gameOver = false;
   startLevel(1);
   render();
+  window.removeEventListener('keydown', handleKeyDown);
   window.addEventListener('keydown', handleKeyDown);
 });
 
