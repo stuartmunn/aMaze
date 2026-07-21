@@ -12,6 +12,8 @@ const ctx = canvas.getContext('2d');
 const levelDisplay = document.getElementById('level-display');
 const healthFill = document.getElementById('health-fill');
 const healthText = document.getElementById('health-text');
+const manaFill = document.getElementById('mana-fill');
+const manaText = document.getElementById('mana-text');
 const gameOverOverlay = document.getElementById('game-over-overlay');
 const restartBtn = document.getElementById('restart-btn');
 const dragonEntry = document.getElementById('dragon-entry');
@@ -41,6 +43,8 @@ const state = {
   fogRadius: null,
   animating: false, // true while a corridor-run slide is in progress — blocks new input
   health: 100, // persists across levels; only resets on restart after game over
+  mana: 10, // persists across levels; only resets on restart after game over
+  turnCount: 0, // increments once per player action; drives mana regen (see resolveDragonTurn)
   traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
   gameOver: false,
   dragon: null, // null below DRAGON_MIN_LEVEL, or after respawn each level — see spawnDragon
@@ -155,6 +159,9 @@ const DRAGON_TRIGGER_MAX = 10;
 const DRAGON_MIN_HEALTH = 50;
 const DRAGON_BREATH_RANGE = 2; // line-of-sight cells, stopped by walls
 const FIREBALL_RANGE = 3; // line-of-sight cells, stopped by walls
+const MAX_MANA = 10;
+const HEAL_MANA_COST = 5;
+const HEAL_AMOUNT = 20; // 20% of max health (health is 0-100)
 
 // Breadth-first search from `start` across the maze graph (an edge exists
 // between two cells only where no wall blocks passage). Returns a map of
@@ -619,6 +626,7 @@ function render() {
   levelDisplay.textContent = `Level ${state.level}`;
 
   updateHealthDisplay();
+  updateManaDisplay();
   updateDragonHealthDisplay();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -644,6 +652,12 @@ function updateHealthDisplay() {
   const health = Math.max(0, state.health);
   healthFill.style.width = `${health}%`;
   healthText.textContent = String(health);
+}
+
+function updateManaDisplay() {
+  const mana = Math.max(0, state.mana);
+  manaFill.style.width = `${(mana / MAX_MANA) * 100}%`;
+  manaText.textContent = String(mana);
 }
 
 function updateDragonHealthDisplay() {
@@ -736,6 +750,7 @@ function handleKeyDown(event) {
     event.preventDefault();
     const range = lineOfSightDistance(state.grid, state.cols, state.rows, state.player, state.dragon.pos);
     if (range > FIREBALL_RANGE) return; // dragon out of range or blocked by a wall
+    if (state.mana < 1) return; // out of mana
     castFireball();
     return;
   }
@@ -744,6 +759,14 @@ function handleKeyDown(event) {
     if (state.animating || state.gameOver) return;
     event.preventDefault();
     skipTurn();
+    return;
+  }
+
+  if (event.key === 'h' || event.key === 'H') {
+    if (state.animating || state.gameOver) return;
+    if (state.health >= 100 || state.mana < HEAL_MANA_COST) return; // nothing to heal / can't afford — no turn wasted
+    event.preventDefault();
+    castHeal();
     return;
   }
 
@@ -785,6 +808,8 @@ function handleKeyDown(event) {
 // Fires a fireball at the dragon; consumes one player move, same as an
 // arrow-key move, and shares the same dragon-turn resolution.
 function castFireball() {
+  state.mana -= 1;
+  updateManaDisplay();
   state.animating = true;
   const from = { x: state.player.x, y: state.player.y };
   const to = { x: state.dragon.pos.x, y: state.dragon.pos.y };
@@ -806,6 +831,19 @@ function skipTurn() {
   });
 }
 
+// Heals the player for up to 20% of max health, capped at 100; costs 5 mana
+// and consumes one player turn, same as fireball/skip/move.
+function castHeal() {
+  state.animating = true;
+  state.mana -= HEAL_MANA_COST;
+  state.health = Math.min(100, state.health + HEAL_AMOUNT);
+  updateManaDisplay();
+  updateHealthDisplay();
+  resolveDragonTurn(() => {
+    state.animating = false;
+  });
+}
+
 function applyFireballDamage() {
   const damage = 20 + Math.floor(Math.random() * 81); // 20-100 inclusive
   state.dragon.health = Math.max(0, state.dragon.health - damage);
@@ -820,6 +858,12 @@ function applyFireballDamage() {
 // happen every turn; chasing moves at half the player's speed (one step
 // per two player turns) via dragon.moveCounter.
 function resolveDragonTurn(onDone) {
+  state.turnCount += 1;
+  if (state.turnCount % 5 === 0 && state.mana < MAX_MANA) {
+    state.mana += 1;
+    updateManaDisplay();
+  }
+
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || state.gameOver) {
     onDone();
@@ -909,6 +953,8 @@ function onGameOver() {
 restartBtn.addEventListener('click', () => {
   gameOverOverlay.classList.add('hidden');
   state.health = 100;
+  state.mana = MAX_MANA;
+  state.turnCount = 0;
   state.gameOver = false;
   startLevel(1);
   render();
