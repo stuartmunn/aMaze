@@ -812,12 +812,12 @@ function render() {
   drawWalls();
   drawExit();
   if (state.dragon && !state.dragon.defeated) drawDragon();
-  if (state.karryhane.active && !state.karryhane.defeated) drawKarryhane();
+  if (state.karryhane && state.karryhane.active && !state.karryhane.defeated) drawKarryhane();
   drawPlayer();
   if (state.dragon && state.dragon.fireBreath) drawFireBreathFrame(state.dragon.fireBreath);
   if (state.playerFireball) drawFireballFrame(state.playerFireball);
-  if (state.karryhane.lightningBolt) drawLightningFrame(state.karryhane.lightningBolt);
-  if (state.karryhane.healFx) drawHealFxFrame(state.karryhane.healFx);
+  if (state.karryhane && state.karryhane.lightningBolt) drawLightningFrame(state.karryhane.lightningBolt);
+  if (state.karryhane && state.karryhane.healFx) drawHealFxFrame(state.karryhane.healFx);
 }
 
 // Marks the dragon as sighted once it's actually visible on screen (past the
@@ -832,7 +832,7 @@ function updateDragonSighting() {
 
 function updateKarryhaneSighting() {
   const karryhane = state.karryhane;
-  if (!karryhane.active || karryhane.defeated || karryhane.sighted) return;
+  if (!karryhane || !karryhane.active || karryhane.defeated || karryhane.sighted) return;
   if (isVisible(karryhane.pos.x, karryhane.pos.y)) karryhane.sighted = true;
 }
 
@@ -862,7 +862,7 @@ function updateDragonHealthDisplay() {
 
 function updateKarryhaneHealthDisplay() {
   const karryhane = state.karryhane;
-  if (!karryhane.active || karryhane.defeated) {
+  if (!karryhane || !karryhane.active || karryhane.defeated) {
     karryhaneEntry.classList.add('hidden');
     return;
   }
@@ -1099,15 +1099,19 @@ function applyFireballDamage(kind) {
   damageTarget(kind, damage);
 }
 
-// Advances the turn counter (which also drives the player's mana regen),
-// then gives the dragon and Karryhane their turn in sequence. All three
-// player actions (move, skip, fireball, heal) route through this so every
-// mob turn is accounted for exactly once per player action.
+// Advances the turn counter (which also drives the player's and Karryhane's
+// mana regen), then gives the dragon and Karryhane their turn in sequence.
+// All three player actions (move, skip, fireball, heal) route through this
+// so every mob turn is accounted for exactly once per player action.
 function resolveMobTurns(onDone) {
   state.turnCount += 1;
   if (state.turnCount % 5 === 0 && state.mana < MAX_MANA) {
     state.mana += 1;
     updateManaDisplay();
+  }
+  const karryhane = state.karryhane;
+  if (karryhane.active && !karryhane.defeated && state.turnCount % 5 === 0 && karryhane.mana < karryhane.maxMana) {
+    karryhane.mana += 1;
   }
   resolveDragonTurn(() => resolveKarryhaneTurn(onDone));
 }
