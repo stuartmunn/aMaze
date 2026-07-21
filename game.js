@@ -698,21 +698,28 @@ function handleKeyDown(event) {
 
   state.animating = true;
   animatePath(path, 0, () => {
-    checkTrap();
-    if (state.gameOver) {
+    // catch guarantees animating clears even if something above throws, so
+    // a broken level transition can't permanently lock out input.
+    try {
+      checkTrap();
+      if (state.gameOver) {
+        state.animating = false;
+        return;
+      }
+      if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
+        // Reaching the exit pre-empts the dragon's turn for this move — no
+        // free reprisal on the winning step.
+        state.animating = false;
+        onLevelComplete();
+        return;
+      }
+      advanceTurn(() => {
+        state.animating = false;
+      });
+    } catch (err) {
       state.animating = false;
-      return;
+      throw err;
     }
-    if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
-      // Reaching the exit pre-empts the dragon's turn for this move — no
-      // free reprisal on the winning step.
-      state.animating = false;
-      onLevelComplete();
-      return;
-    }
-    advanceTurn(() => {
-      state.animating = false;
-    });
   });
 }
 
@@ -771,12 +778,12 @@ function resolveDragonTurn(onDone) {
     const to = { x: state.player.x, y: state.player.y };
     startFireBreathAnimation(from, to, () => {
       applyDragonFireDamage();
-      onDone();
+      if (!state.gameOver) onDone();
     });
   } else {
     const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
     const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
-    dragon.pos = entry.prev;
+    if (entry && entry.prev) dragon.pos = entry.prev;
     render();
     onDone();
   }
