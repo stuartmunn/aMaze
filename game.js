@@ -603,6 +603,14 @@ const KEY_MOVES = {
   ArrowRight: { dx: 1, dy: 0, wall: WALL.RIGHT },
   ArrowDown: { dx: 0, dy: 1, wall: WALL.BOTTOM },
   ArrowLeft: { dx: -1, dy: 0, wall: WALL.LEFT },
+  w: { dx: 0, dy: -1, wall: WALL.TOP },
+  W: { dx: 0, dy: -1, wall: WALL.TOP },
+  d: { dx: 1, dy: 0, wall: WALL.RIGHT },
+  D: { dx: 1, dy: 0, wall: WALL.RIGHT },
+  s: { dx: 0, dy: 1, wall: WALL.BOTTOM },
+  S: { dx: 0, dy: 1, wall: WALL.BOTTOM },
+  a: { dx: -1, dy: 0, wall: WALL.LEFT },
+  A: { dx: -1, dy: 0, wall: WALL.LEFT },
 };
 
 // The two walls at right angles to a given direction of travel — used to
