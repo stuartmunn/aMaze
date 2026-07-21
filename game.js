@@ -14,6 +14,8 @@ const healthFill = document.getElementById('health-fill');
 const healthText = document.getElementById('health-text');
 const gameOverOverlay = document.getElementById('game-over-overlay');
 const restartBtn = document.getElementById('restart-btn');
+const dragonHealthBar = document.getElementById('dragon-health-bar');
+const dragonHealthFill = document.getElementById('dragon-health-fill');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
 const VIEWPORT_MARGIN = 40; // px — safety margin so the canvas never triggers scroll
@@ -40,6 +42,8 @@ const state = {
   health: 100, // persists across levels; only resets on restart after game over
   traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
   gameOver: false,
+  dragon: null, // null below DRAGON_MIN_LEVEL, or after respawn each level — see spawnDragon
+  playerMoveCount: 0, // increments once per resolved player move (arrow move or fireball cast)
 };
 
 // ---------------------------------------------------------------------------
@@ -143,6 +147,114 @@ function placeTraps(grid, cols, rows, exit) {
     traps.set(`${x},${y}`, { triggered: false });
   }
   return traps;
+}
+
+const DRAGON_MIN_LEVEL = 6;
+const DRAGON_TRIGGER_MIN = 2;
+const DRAGON_TRIGGER_MAX = 10;
+const DRAGON_MIN_HEALTH = 50;
+const DRAGON_BREATH_RANGE = 2; // line-of-sight cells, stopped by walls
+const FIREBALL_RANGE = 3; // line-of-sight cells, stopped by walls
+
+// Breadth-first search from `start` across the maze graph (an edge exists
+// between two cells only where no wall blocks passage). Returns a map of
+// "x,y" -> { dist, prev } for every reachable cell. In a perfect maze every
+// cell is reachable from every other cell, so this always covers the grid.
+function bfsFrom(grid, cols, rows, start) {
+  const key = (x, y) => `${x},${y}`;
+  const dist = new Map([[key(start.x, start.y), { dist: 0, prev: null }]]);
+  const queue = [start];
+
+  while (queue.length > 0) {
+    const { x, y } = queue.shift();
+    const cell = grid[y][x];
+    const d = dist.get(key(x, y)).dist;
+    const steps = [
+      [x, y - 1, WALL.TOP],
+      [x + 1, y, WALL.RIGHT],
+      [x, y + 1, WALL.BOTTOM],
+      [x - 1, y, WALL.LEFT],
+    ];
+
+    for (const [nx, ny, wall] of steps) {
+      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+      if (cell.walls & wall) continue; // blocked
+      const k = key(nx, ny);
+      if (dist.has(k)) continue;
+      dist.set(k, { dist: d + 1, prev: { x, y } });
+      queue.push({ x: nx, y: ny });
+    }
+  }
+
+  return dist;
+}
+
+function bfsDistance(grid, cols, rows, from, to) {
+  const result = bfsFrom(grid, cols, rows, from);
+  const entry = result.get(`${to.x},${to.y}`);
+  return entry ? entry.dist : Infinity; // Infinity is only a safety net — see bfsFrom's connectivity note
+}
+
+// Straight-line distance between two cells sharing a row or column, walking
+// cell by cell and stopping at the first wall in the way. Returns Infinity
+// if a wall blocks the line, or if the cells aren't aligned at all (no
+// diagonal sight in a corridor maze — matches how movement itself works).
+function lineOfSightDistance(grid, cols, rows, a, b) {
+  if (a.x === b.x && a.y === b.y) return 0;
+
+  if (a.x === b.x) {
+    const dy = b.y > a.y ? 1 : -1;
+    const wall = dy === 1 ? WALL.BOTTOM : WALL.TOP;
+    let y = a.y;
+    let dist = 0;
+    while (y !== b.y) {
+      if (grid[y][a.x].walls & wall) return Infinity;
+      y += dy;
+      dist++;
+    }
+    return dist;
+  }
+
+  if (a.y === b.y) {
+    const dx = b.x > a.x ? 1 : -1;
+    const wall = dx === 1 ? WALL.RIGHT : WALL.LEFT;
+    let x = a.x;
+    let dist = 0;
+    while (x !== b.x) {
+      if (grid[a.y][x].walls & wall) return Infinity;
+      x += dx;
+      dist++;
+    }
+    return dist;
+  }
+
+  return Infinity; // not aligned on a row or column
+}
+
+// Picks one dead-end for the dragon (avoiding cells already trapped where
+// possible) and rolls its stats fresh for the level. Returns null below
+// DRAGON_MIN_LEVEL.
+function spawnDragon(grid, cols, rows, exit, traps, level) {
+  if (level < DRAGON_MIN_LEVEL) return null;
+
+  const deadEnds = findDeadEnds(grid, cols, rows, exit);
+  const untrapped = deadEnds.filter(({ x, y }) => !traps.has(`${x},${y}`));
+  const candidates = untrapped.length > 0 ? untrapped : deadEnds;
+  const spawn = candidates[Math.floor(Math.random() * candidates.length)];
+
+  const maxHealth = DRAGON_MIN_HEALTH + Math.floor(Math.random() * (level * 100 - DRAGON_MIN_HEALTH + 1));
+  const triggerDistance = DRAGON_TRIGGER_MIN + Math.floor(Math.random() * (DRAGON_TRIGGER_MAX - DRAGON_TRIGGER_MIN + 1));
+
+  return {
+    pos: { x: spawn.x, y: spawn.y },
+    health: maxHealth,
+    maxHealth,
+    awake: false,
+    triggerDistance,
+    defeated: false,
+    fireBreath: null,
+    fireball: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +454,108 @@ function drawPlayer() {
   ctx.fill();
 }
 
+function drawDragon() {
+  const { dragon, cellSize } = state;
+  if (!isVisible(dragon.pos.x, dragon.pos.y)) return;
+
+  const cx = dragon.pos.x * cellSize + cellSize / 2;
+  const cy = dragon.pos.y * cellSize + cellSize / 2;
+
+  ctx.font = `${cellSize * 0.8}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🐉', cx, cy);
+}
+
+const FIRE_BREATH_MS = 350;
+const FIREBALL_MS = 300;
+
+function cellCentre(cell) {
+  return { x: cell.x * state.cellSize + state.cellSize / 2, y: cell.y * state.cellSize + state.cellSize / 2 };
+}
+
+// Straight tapered bolt from the dragon to the player, fading out near the end.
+function drawFireBreathFrame(fb) {
+  const t = Math.min((performance.now() - fb.startTime) / FIRE_BREATH_MS, 1);
+  const from = cellCentre(fb.from);
+  const to = cellCentre(fb.to);
+  const x = from.x + (to.x - from.x) * t;
+  const y = from.y + (to.y - from.y) * t;
+  const alpha = t < 0.8 ? 1 : 1 - (t - 0.8) / 0.2;
+
+  ctx.strokeStyle = `rgba(255, 106, 31, ${alpha})`;
+  ctx.lineWidth = state.cellSize * 0.25;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+
+  ctx.fillStyle = `rgba(255, 210, 63, ${alpha})`;
+  ctx.beginPath();
+  ctx.arc(x, y, state.cellSize * 0.15, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function startFireBreathAnimation(from, to, onComplete) {
+  state.dragon.fireBreath = { from, to, startTime: performance.now() };
+
+  function frame(now) {
+    const t = Math.min((now - state.dragon.fireBreath.startTime) / FIRE_BREATH_MS, 1);
+    render();
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      state.dragon.fireBreath = null;
+      render(); // clear the bolt from canvas before handing back control
+      onComplete();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// Small flaming orb arcing from the player to the dragon (a lifted midpoint
+// distinguishes it visually from the dragon's straight fire-breath bolt).
+function drawFireballFrame(fb) {
+  const t = Math.min((performance.now() - fb.startTime) / FIREBALL_MS, 1);
+  const from = cellCentre(fb.from);
+  const to = cellCentre(fb.to);
+  const lift = -state.cellSize * 0.6 * Math.sin(Math.PI * t);
+  const x = from.x + (to.x - from.x) * t;
+  const y = from.y + (to.y - from.y) * t + lift;
+
+  ctx.fillStyle = '#ff8a3f';
+  ctx.beginPath();
+  ctx.arc(x, y, state.cellSize * 0.14, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath();
+  ctx.arc(x, y, state.cellSize * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function startFireballAnimation(from, to, onComplete) {
+  state.dragon.fireball = { from, to, startTime: performance.now() };
+
+  function frame(now) {
+    const t = Math.min((now - state.dragon.fireball.startTime) / FIREBALL_MS, 1);
+    render();
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      state.dragon.fireball = null;
+      render(); // clear the orb from canvas before handing back control
+      onComplete();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
 /**
  * Sizes the canvas and redraws everything. Called on state changes only —
  * this isn't an animation loop, so there's no per-frame redraw.
@@ -352,17 +566,32 @@ function render() {
   canvas.height = state.cellSize * state.rows;
   levelDisplay.textContent = `Level ${state.level}`;
   updateHealthDisplay();
+  updateDragonHealthDisplay();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawWalls();
   drawExit();
+  if (state.dragon && !state.dragon.defeated) drawDragon();
   drawPlayer();
+  if (state.dragon && state.dragon.fireBreath) drawFireBreathFrame(state.dragon.fireBreath);
+  if (state.dragon && state.dragon.fireball) drawFireballFrame(state.dragon.fireball);
 }
 
 function updateHealthDisplay() {
   const health = Math.max(0, state.health);
   healthFill.style.width = `${health}%`;
   healthText.textContent = String(health);
+}
+
+function updateDragonHealthDisplay() {
+  const dragon = state.dragon;
+  if (!dragon || dragon.defeated) {
+    dragonHealthBar.classList.add('hidden');
+    return;
+  }
+  dragonHealthBar.classList.remove('hidden');
+  const pct = Math.max(0, Math.round((dragon.health / dragon.maxHealth) * 100));
+  dragonHealthFill.style.width = `${pct}%`;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +679,15 @@ function animatePath(path, index, onDone) {
 }
 
 function handleKeyDown(event) {
+  if (event.code === 'Space') {
+    if (state.animating || !state.dragon || state.dragon.defeated || state.gameOver) return;
+    event.preventDefault();
+    const range = lineOfSightDistance(state.grid, state.cols, state.rows, state.player, state.dragon.pos);
+    if (range > FIREBALL_RANGE) return; // dragon out of range or blocked by a wall
+    castFireball();
+    return;
+  }
+
   const move = KEY_MOVES[event.key];
   if (!move || state.animating) return;
 
@@ -460,18 +698,95 @@ function handleKeyDown(event) {
 
   state.animating = true;
   animatePath(path, 0, () => {
-    // finally guarantees the flag clears even if onLevelComplete throws,
-    // so a broken level transition can't permanently lock out input.
+    // catch guarantees animating clears even if something above throws, so
+    // a broken level transition can't permanently lock out input.
     try {
       checkTrap();
-      if (state.gameOver) return;
-      if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
-        onLevelComplete();
+      if (state.gameOver) {
+        state.animating = false;
+        return;
       }
-    } finally {
+      if (state.player.x === state.exit.x && state.player.y === state.exit.y) {
+        // Reaching the exit pre-empts the dragon's turn for this move — no
+        // free reprisal on the winning step.
+        state.animating = false;
+        onLevelComplete();
+        return;
+      }
+      advanceTurn(() => {
+        state.animating = false;
+      });
+    } catch (err) {
       state.animating = false;
+      throw err;
     }
   });
+}
+
+// Fires a fireball at the dragon; consumes one player move, same as an
+// arrow-key move, and shares the same dragon-turn cadence via advanceTurn.
+function castFireball() {
+  state.animating = true;
+  const from = { x: state.player.x, y: state.player.y };
+  const to = { x: state.dragon.pos.x, y: state.dragon.pos.y };
+
+  startFireballAnimation(from, to, () => {
+    applyFireballDamage();
+    advanceTurn(() => {
+      state.animating = false;
+    });
+  });
+}
+
+function applyFireballDamage() {
+  const damage = 20 + Math.floor(Math.random() * 81); // 20-100 inclusive
+  state.dragon.health = Math.max(0, state.dragon.health - damage);
+  updateDragonHealthDisplay();
+
+  if (state.dragon.health <= 0) onDragonDefeated();
+}
+
+// Advances the shared player-move counter and resolves the dragon's turn
+// (wake check every move; move-or-breathe action every 2nd move). Both the
+// arrow-move and fireball-cast paths call this so the cadence can't desync.
+function advanceTurn(onDone) {
+  state.playerMoveCount += 1;
+  resolveDragonTurn(onDone);
+}
+
+function resolveDragonTurn(onDone) {
+  const dragon = state.dragon;
+  if (!dragon || dragon.defeated || state.gameOver) {
+    onDone();
+    return;
+  }
+
+  if (!dragon.awake) {
+    const distance = bfsDistance(state.grid, state.cols, state.rows, state.player, dragon.pos);
+    if (distance <= dragon.triggerDistance) dragon.awake = true;
+  }
+
+  if (!dragon.awake || state.playerMoveCount % 2 !== 0) {
+    onDone();
+    return;
+  }
+
+  const sightRange = lineOfSightDistance(state.grid, state.cols, state.rows, dragon.pos, state.player);
+
+  if (sightRange <= DRAGON_BREATH_RANGE) {
+    const from = { x: dragon.pos.x, y: dragon.pos.y };
+    const to = { x: state.player.x, y: state.player.y };
+    startFireBreathAnimation(from, to, () => {
+      applyDragonFireDamage();
+      if (!state.gameOver) onDone();
+    });
+  } else {
+    const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
+    const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
+    if (entry && entry.prev) dragon.pos = entry.prev;
+    render();
+    onDone();
+  }
 }
 
 // Checks whether the player's current cell holds an untriggered trap; if so,
@@ -491,6 +806,28 @@ function checkTrap() {
     state.animating = false;
     onGameOver();
   }
+}
+
+// Same damage/game-over pattern as checkTrap, for the dragon's fire breath.
+function applyDragonFireDamage() {
+  const damage = Math.floor(Math.random() * 51); // 0-50 inclusive
+  state.health = Math.max(0, state.health - damage);
+  updateHealthDisplay();
+
+  if (state.health <= 0) {
+    state.animating = false;
+    onGameOver();
+  }
+}
+
+// Just removes the threat — no reward, no bonus. Reaching the exit remains
+// the only win condition.
+function onDragonDefeated() {
+  const dragon = state.dragon;
+  dragon.defeated = true;
+  dragon.fireBreath = null;
+  dragon.fireball = null;
+  updateDragonHealthDisplay();
 }
 
 function onGameOver() {
@@ -541,6 +878,8 @@ function startLevel(level) {
   state.exit = { x: state.cols - 1, y: state.rows - 1 }; // opposite corner
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
+  state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
+  state.playerMoveCount = 0;
 }
 
 startLevel(1);
