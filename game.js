@@ -618,10 +618,6 @@ function render() {
   canvas.height = state.cellSize * state.rows;
   levelDisplay.textContent = `Level ${state.level}`;
 
-  if (state.dragon && !state.dragon.defeated && isVisible(state.dragon.pos.x, state.dragon.pos.y)) {
-    state.dragon.sighted = true;
-  }
-
   updateHealthDisplay();
   updateDragonHealthDisplay();
 
@@ -632,6 +628,16 @@ function render() {
   drawPlayer();
   if (state.dragon && state.dragon.fireBreath) drawFireBreathFrame(state.dragon.fireBreath);
   if (state.dragon && state.dragon.fireball) drawFireballFrame(state.dragon.fireball);
+}
+
+// Marks the dragon as sighted once it's actually visible on screen (past the
+// fog boundary). Sighted is one-way for the level, so once set there's
+// nothing left to check. Called from game-logic points where player/dragon
+// position changes, not from render() — sighting is state, not a display concern.
+function updateDragonSighting() {
+  const dragon = state.dragon;
+  if (!dragon || dragon.defeated || dragon.sighted) return;
+  if (isVisible(dragon.pos.x, dragon.pos.y)) dragon.sighted = true;
 }
 
 function updateHealthDisplay() {
@@ -702,6 +708,7 @@ function animateSegment(from, to, onComplete) {
   function frame(now) {
     const t = Math.min((now - start) / MS_PER_CELL, 1);
     state.displayPlayer = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    updateDragonSighting();
     render();
 
     if (t < 1) {
@@ -844,6 +851,7 @@ function resolveDragonTurn(onDone) {
       const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
       const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
       if (entry && entry.prev) dragon.pos = entry.prev;
+      updateDragonSighting();
       render();
     }
     onDone();
@@ -940,6 +948,7 @@ function startLevel(level) {
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
+  updateDragonSighting();
 }
 
 startLevel(1);
