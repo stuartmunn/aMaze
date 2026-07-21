@@ -64,6 +64,21 @@ h1 {
   text-shadow: 0 1px 2px #000;
 }
 
+.dragon-health-bar {
+  border-color: #3a6a3a;
+}
+
+#dragon-health-bar.hidden {
+  display: none;
+}
+
+#dragon-health-fill {
+  height: 100%;
+  width: 100%;
+  background: #4caf50;
+  transition: width 0.2s ease-out;
+}
+
 #game-over-overlay {
   position: fixed;
   inset: 0;
