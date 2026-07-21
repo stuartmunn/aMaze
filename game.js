@@ -400,7 +400,7 @@ function mistRand(seed) {
 const MIST_BLOB_COUNT = 3;
 
 function drawMist(px, py, cellSize, seedBase, amount) {
-  ctx.fillStyle = `rgba(22, 22, 34, ${0.55 * amount})`;
+  ctx.fillStyle = `rgba(22, 22, 34, ${amount})`;
   ctx.fillRect(px, py, cellSize, cellSize);
 
   for (let i = 0; i < MIST_BLOB_COUNT; i++) {
