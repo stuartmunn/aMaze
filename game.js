@@ -251,6 +251,7 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
     maxHealth,
     awake: false,
     triggerDistance,
+    moveCounter: 0,
     defeated: false,
     fireBreath: null,
     fireball: null,
@@ -733,9 +734,11 @@ function applyFireballDamage() {
   if (state.dragon.health <= 0) onDragonDefeated();
 }
 
-// Resolves the dragon's turn (wake check, then move-or-breathe action)
+// Resolves the dragon's turn (wake check, then breathe-or-move action)
 // after a player action. Both the arrow-move and fireball-cast paths call
-// this so the dragon always gets a turn back.
+// this so the dragon always gets a turn back. Fire breath is free and can
+// happen every turn; chasing moves at half the player's speed (one step
+// per two player turns) via dragon.moveCounter.
 function resolveDragonTurn(onDone) {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || state.gameOver) {
@@ -763,10 +766,13 @@ function resolveDragonTurn(onDone) {
       if (!state.gameOver) onDone();
     });
   } else {
-    const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
-    const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
-    if (entry && entry.prev) dragon.pos = entry.prev;
-    render();
+    dragon.moveCounter += 1;
+    if (dragon.moveCounter % 2 === 0) {
+      const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
+      const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
+      if (entry && entry.prev) dragon.pos = entry.prev;
+      render();
+    }
     onDone();
   }
 }
