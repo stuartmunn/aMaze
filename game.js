@@ -14,7 +14,8 @@ const healthFill = document.getElementById('health-fill');
 const healthText = document.getElementById('health-text');
 const gameOverOverlay = document.getElementById('game-over-overlay');
 const restartBtn = document.getElementById('restart-btn');
-const dragonHealthBar = document.getElementById('dragon-health-bar');
+const dragonEntry = document.getElementById('dragon-entry');
+const dragonNameEl = document.getElementById('dragon-name');
 const dragonHealthFill = document.getElementById('dragon-health-fill');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
@@ -253,6 +254,7 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
     triggerDistance,
     moveCounter: 0,
     defeated: false,
+    sighted: false, // becomes true once the player has seen it on screen; name then replaces '???'
     fireBreath: null,
     fireball: null,
   };
@@ -615,6 +617,7 @@ function render() {
   canvas.width = state.cellSize * state.cols;
   canvas.height = state.cellSize * state.rows;
   levelDisplay.textContent = `Level ${state.level}`;
+
   updateHealthDisplay();
   updateDragonHealthDisplay();
 
@@ -627,6 +630,16 @@ function render() {
   if (state.dragon && state.dragon.fireball) drawFireballFrame(state.dragon.fireball);
 }
 
+// Marks the dragon as sighted once it's actually visible on screen (past the
+// fog boundary). Sighted is one-way for the level, so once set there's
+// nothing left to check. Called from game-logic points where player/dragon
+// position changes, not from render() — sighting is state, not a display concern.
+function updateDragonSighting() {
+  const dragon = state.dragon;
+  if (!dragon || dragon.defeated || dragon.sighted) return;
+  if (isVisible(dragon.pos.x, dragon.pos.y)) dragon.sighted = true;
+}
+
 function updateHealthDisplay() {
   const health = Math.max(0, state.health);
   healthFill.style.width = `${health}%`;
@@ -636,10 +649,11 @@ function updateHealthDisplay() {
 function updateDragonHealthDisplay() {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated) {
-    dragonHealthBar.classList.add('hidden');
+    dragonEntry.classList.add('hidden');
     return;
   }
-  dragonHealthBar.classList.remove('hidden');
+  dragonEntry.classList.remove('hidden');
+  dragonNameEl.textContent = dragon.sighted ? 'Dragon' : '???';
   const pct = Math.max(0, Math.round((dragon.health / dragon.maxHealth) * 100));
   dragonHealthFill.style.width = `${pct}%`;
 }
@@ -694,6 +708,7 @@ function animateSegment(from, to, onComplete) {
   function frame(now) {
     const t = Math.min((now - start) / MS_PER_CELL, 1);
     state.displayPlayer = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    updateDragonSighting();
     render();
 
     if (t < 1) {
@@ -836,6 +851,7 @@ function resolveDragonTurn(onDone) {
       const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
       const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
       if (entry && entry.prev) dragon.pos = entry.prev;
+      updateDragonSighting();
       render();
     }
     onDone();
@@ -932,6 +948,7 @@ function startLevel(level) {
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
+  updateDragonSighting();
 }
 
 startLevel(1);
