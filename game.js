@@ -19,6 +19,9 @@ const restartBtn = document.getElementById('restart-btn');
 const dragonEntry = document.getElementById('dragon-entry');
 const dragonNameEl = document.getElementById('dragon-name');
 const dragonHealthFill = document.getElementById('dragon-health-fill');
+const karryhaneEntry = document.getElementById('karryhane-entry');
+const karryhaneNameEl = document.getElementById('karryhane-name');
+const karryhaneHealthFill = document.getElementById('karryhane-health-fill');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
 const VIEWPORT_MARGIN = 40; // px — safety margin so the canvas never triggers scroll
@@ -44,10 +47,13 @@ const state = {
   animating: false, // true while a corridor-run slide is in progress — blocks new input
   health: 100, // persists across levels; only resets on restart after game over
   mana: 10, // persists across levels; only resets on restart after game over
-  turnCount: 0, // increments once per player action; drives mana regen (see resolveDragonTurn)
+  turnCount: 0, // increments once per player action — drives mana regen and gates Karryhane's spawn
   traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
   gameOver: false,
   dragon: null, // null below DRAGON_MIN_LEVEL, or after respawn each level — see spawnDragon
+  karryhane: null, // re-rolled every level — see spawnKarryhane
+  karryhaneIsLich: false, // set permanently for the rest of the run once he's first killed
+  playerFireball: null, // in-flight fireball animation state, whoever the target is
 };
 
 // ---------------------------------------------------------------------------
@@ -163,6 +169,16 @@ const MAX_MANA = 10;
 const HEAL_MANA_COST = 5;
 const HEAL_AMOUNT = 20; // 20% of max health (health is 0-100)
 
+const KARRYHANE_SPAWN_DELAY_TURNS = 10; // turns after level start before he enters the maze
+const KARRYHANE_MAX_HEALTH = 100; // mirrors the player's health
+const KARRYHANE_MAX_MANA = 10;
+const KARRYHANE_SPELL_COST = 1; // mana per lightning bolt or heal
+const KARRYHANE_LIGHTNING_RANGE = 3; // line-of-sight cells, stopped by walls
+const KARRYHANE_LIGHTNING_DAMAGE = 20; // flat, unlike the player's/dragon's randomised damage
+const KARRYHANE_HEAL_AMOUNT = 25;
+const KARRYHANE_FLEE_RATIO = 0.5; // flees (or fights if cornered) at or below this fraction of max health
+const KARRYHANE_SENSE_RADIUS = 6; // straight-line "notices a target" range, mirrors the dragon's triggerDistance
+
 // Breadth-first search from `start` across the maze graph (an edge exists
 // between two cells only where no wall blocks passage). Returns a map of
 // "x,y" -> { dist, prev } for every reachable cell. In a perfect maze every
@@ -239,6 +255,22 @@ function lineOfSightDistance(grid, cols, rows, a, b) {
   return Infinity; // not aligned on a row or column
 }
 
+// Cells reachable in one step from (x, y) — i.e. neighbours not blocked by a
+// wall. Used for Karryhane's wander/flee movement (unlike the dragon, which
+// only ever moves via BFS-toward-target).
+function getOpenNeighbours(grid, x, y, cols, rows) {
+  const cell = grid[y][x];
+  const steps = [
+    [x, y - 1, WALL.TOP],
+    [x + 1, y, WALL.RIGHT],
+    [x, y + 1, WALL.BOTTOM],
+    [x - 1, y, WALL.LEFT],
+  ];
+  return steps
+    .filter(([nx, ny, wall]) => nx >= 0 && nx < cols && ny >= 0 && ny < rows && !(cell.walls & wall))
+    .map(([nx, ny]) => ({ x: nx, y: ny }));
+}
+
 // Picks one dead-end for the dragon (avoiding cells already trapped where
 // possible) and rolls its stats fresh for the level. Returns null below
 // DRAGON_MIN_LEVEL.
@@ -263,7 +295,28 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
     defeated: false,
     sighted: false, // becomes true once the player has seen it on screen; name then replaces '???'
     fireBreath: null,
-    fireball: null,
+  };
+}
+
+// Karryhane always exists from level start, but stays inactive (off the
+// board, not rendered, no turn taken) until KARRYHANE_SPAWN_DELAY_TURNS have
+// elapsed — see resolveKarryhaneTurn. He then enters at the maze entrance,
+// same as the player. Once killed, he returns every level after as a Lich —
+// same stats and AI, just a permanent identity/appearance change (set via
+// state.karryhaneIsLich in startLevel) — and can be killed again freely.
+function spawnKarryhane(isLich) {
+  return {
+    pos: { x: 0, y: 0 },
+    health: KARRYHANE_MAX_HEALTH,
+    maxHealth: KARRYHANE_MAX_HEALTH,
+    mana: KARRYHANE_MAX_MANA,
+    maxMana: KARRYHANE_MAX_MANA,
+    active: false,
+    defeated: false,
+    sighted: false,
+    isLich,
+    lightningBolt: null,
+    healFx: null,
   };
 }
 
@@ -527,6 +580,51 @@ function drawDragon() {
   ctx.fillText('🐉', cx, cy);
 }
 
+// Karryhane's dark counterpart to drawPlayer: same silhouette, black-and-red
+// palette, no star trim — reads as a corrupted mirror of the player's sprite
+// rather than another emoji stamp.
+function drawKarryhane() {
+  const { karryhane, cellSize } = state;
+  if (!isVisible(karryhane.pos.x, karryhane.pos.y)) return;
+
+  const cx = karryhane.pos.x * cellSize + cellSize / 2;
+  const cy = karryhane.pos.y * cellSize + cellSize / 2;
+  const s = cellSize * 0.3;
+
+  // The Lich (post-death reincarnation) swaps the fleshy head/robe trim for
+  // a bare skull and a sickly green glow, so he reads as a different
+  // creature at a glance despite sharing the same silhouette and stats.
+  const robe = '#241a1a';
+  const head = karryhane.isLich ? '#d8e8d8' : '#c9a688';
+  const trim = karryhane.isLich ? '#5fe07a' : '#d13b3b';
+
+  ctx.fillStyle = robe;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s * 0.1);
+  ctx.lineTo(cx - s * 0.75, cy + s);
+  ctx.quadraticCurveTo(cx, cy + s * 1.2, cx + s * 0.75, cy + s);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = head;
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.35, s * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = robe;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s * 1.5);
+  ctx.lineTo(cx - s * 0.55, cy - s * 0.25);
+  ctx.lineTo(cx + s * 0.55, cy - s * 0.25);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = trim;
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.6, s * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 const FIRE_BREATH_MS = 350;
 const FIREBALL_MS = 300;
 
@@ -598,17 +696,96 @@ function drawFireballFrame(fb) {
 }
 
 function startFireballAnimation(from, to, onComplete) {
-  state.dragon.fireball = { from, to, startTime: performance.now() };
+  state.playerFireball = { from, to, startTime: performance.now() };
 
   function frame(now) {
-    const t = Math.min((now - state.dragon.fireball.startTime) / FIREBALL_MS, 1);
+    const t = Math.min((now - state.playerFireball.startTime) / FIREBALL_MS, 1);
     render();
 
     if (t < 1) {
       requestAnimationFrame(frame);
     } else {
-      state.dragon.fireball = null;
+      state.playerFireball = null;
       render(); // clear the orb from canvas before handing back control
+      onComplete();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+const LIGHTNING_MS = 250;
+
+// Jagged blue-white bolt from Karryhane to his target, built from a few
+// randomised midpoint offsets so it reads as lightning rather than a straight
+// laser. The zigzag points are re-rolled once per cast (stored on the fx
+// object) rather than every frame, so the bolt doesn't crawl while it fades.
+function drawLightningFrame(fx) {
+  const t = Math.min((performance.now() - fx.startTime) / LIGHTNING_MS, 1);
+  const alpha = t < 0.7 ? 1 : 1 - (t - 0.7) / 0.3;
+  const from = cellCentre(fx.from);
+  const to = cellCentre(fx.to);
+
+  ctx.strokeStyle = `rgba(120, 200, 255, ${alpha})`;
+  ctx.lineWidth = state.cellSize * 0.12;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  for (const [ox, oy] of fx.jitter) {
+    ctx.lineTo(from.x + (to.x - from.x) * ox + oy, from.y + (to.y - from.y) * ox - oy);
+  }
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+}
+
+function startLightningAnimation(from, to, onComplete) {
+  const jitter = [0.25, 0.5, 0.75].map((frac) => [frac, (Math.random() - 0.5) * state.cellSize * 0.4]);
+  state.karryhane.lightningBolt = { from, to, jitter, startTime: performance.now() };
+
+  function frame(now) {
+    const t = Math.min((now - state.karryhane.lightningBolt.startTime) / LIGHTNING_MS, 1);
+    render();
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      state.karryhane.lightningBolt = null;
+      render();
+      onComplete();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+const HEAL_FX_MS = 400;
+
+// Simple green pulse over Karryhane's cell for self-heals.
+function drawHealFxFrame(fx) {
+  const t = Math.min((performance.now() - fx.startTime) / HEAL_FX_MS, 1);
+  const { x, y } = cellCentre(fx.at);
+  const radius = state.cellSize * 0.5 * t;
+  const alpha = 1 - t;
+
+  ctx.strokeStyle = `rgba(90, 220, 120, ${alpha})`;
+  ctx.lineWidth = state.cellSize * 0.08;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function startHealFxAnimation(at, onComplete) {
+  state.karryhane.healFx = { at, startTime: performance.now() };
+
+  function frame(now) {
+    const t = Math.min((now - state.karryhane.healFx.startTime) / HEAL_FX_MS, 1);
+    render();
+
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      state.karryhane.healFx = null;
+      render();
       onComplete();
     }
   }
@@ -629,14 +806,18 @@ function render() {
   updateHealthDisplay();
   updateManaDisplay();
   updateDragonHealthDisplay();
+  updateKarryhaneHealthDisplay();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawWalls();
   drawExit();
   if (state.dragon && !state.dragon.defeated) drawDragon();
+  if (state.karryhane && state.karryhane.active && !state.karryhane.defeated) drawKarryhane();
   drawPlayer();
   if (state.dragon && state.dragon.fireBreath) drawFireBreathFrame(state.dragon.fireBreath);
-  if (state.dragon && state.dragon.fireball) drawFireballFrame(state.dragon.fireball);
+  if (state.playerFireball) drawFireballFrame(state.playerFireball);
+  if (state.karryhane && state.karryhane.lightningBolt) drawLightningFrame(state.karryhane.lightningBolt);
+  if (state.karryhane && state.karryhane.healFx) drawHealFxFrame(state.karryhane.healFx);
 }
 
 // Marks the dragon as sighted once it's actually visible on screen (past the
@@ -647,6 +828,12 @@ function updateDragonSighting() {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || dragon.sighted) return;
   if (isVisible(dragon.pos.x, dragon.pos.y)) dragon.sighted = true;
+}
+
+function updateKarryhaneSighting() {
+  const karryhane = state.karryhane;
+  if (!karryhane || !karryhane.active || karryhane.defeated || karryhane.sighted) return;
+  if (isVisible(karryhane.pos.x, karryhane.pos.y)) karryhane.sighted = true;
 }
 
 function updateHealthDisplay() {
@@ -671,6 +858,18 @@ function updateDragonHealthDisplay() {
   dragonNameEl.textContent = dragon.sighted ? 'Dragon' : '???';
   const pct = Math.max(0, Math.round((dragon.health / dragon.maxHealth) * 100));
   dragonHealthFill.style.width = `${pct}%`;
+}
+
+function updateKarryhaneHealthDisplay() {
+  const karryhane = state.karryhane;
+  if (!karryhane || !karryhane.active || karryhane.defeated) {
+    karryhaneEntry.classList.add('hidden');
+    return;
+  }
+  karryhaneEntry.classList.remove('hidden');
+  karryhaneNameEl.textContent = karryhane.sighted ? (karryhane.isLich ? 'The Lich Karryhane' : 'Karryhane') : '???';
+  const pct = Math.max(0, Math.round((karryhane.health / karryhane.maxHealth) * 100));
+  karryhaneHealthFill.style.width = `${pct}%`;
 }
 
 // ---------------------------------------------------------------------------
@@ -724,6 +923,7 @@ function animateSegment(from, to, onComplete) {
     const t = Math.min((now - start) / MS_PER_CELL, 1);
     state.displayPlayer = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
     updateDragonSighting();
+    updateKarryhaneSighting();
     render();
 
     if (t < 1) {
@@ -745,14 +945,62 @@ function animatePath(path, index, onDone) {
   animateSegment(path[index], path[index + 1], () => animatePath(path, index + 1, onDone));
 }
 
+// All currently-alive combatants other than the one named in `exclude`
+// ('player', 'dragon', or 'karryhane'), each as { kind, pos }. Shared by the
+// dragon's and Karryhane's turn resolution so either can target the other.
+function livingTargetsFor(exclude) {
+  const targets = [];
+  if (exclude !== 'player' && !state.gameOver) targets.push({ kind: 'player', pos: state.player });
+  if (exclude !== 'dragon' && state.dragon && !state.dragon.defeated) targets.push({ kind: 'dragon', pos: state.dragon.pos });
+  if (exclude !== 'karryhane' && state.karryhane.active && !state.karryhane.defeated) targets.push({ kind: 'karryhane', pos: state.karryhane.pos });
+  return targets;
+}
+
+// Applies damage to whichever combatant `kind` names, updating its HUD and
+// triggering its defeat/game-over handling. Shared by the player's fireball,
+// the dragon's fire breath, and Karryhane's lightning.
+function damageTarget(kind, amount) {
+  if (kind === 'player') {
+    state.health = Math.max(0, state.health - amount);
+    updateHealthDisplay();
+    if (state.health <= 0) {
+      state.animating = false;
+      onGameOver();
+    }
+  } else if (kind === 'dragon') {
+    state.dragon.health = Math.max(0, state.dragon.health - amount);
+    updateDragonHealthDisplay();
+    if (state.dragon.health <= 0) onDragonDefeated();
+  } else if (kind === 'karryhane') {
+    state.karryhane.health = Math.max(0, state.karryhane.health - amount);
+    updateKarryhaneHealthDisplay();
+    if (state.karryhane.health <= 0) onKarryhaneDefeated();
+  }
+}
+
+// Nearest of the dragon/Karryhane (whichever are alive) within fireball
+// range and line of sight, or null if neither qualifies.
+function getFireballTarget() {
+  let best = null;
+  let bestDist = Infinity;
+  for (const t of livingTargetsFor('player')) {
+    const d = lineOfSightDistance(state.grid, state.cols, state.rows, state.player, t.pos);
+    if (d <= FIREBALL_RANGE && d < bestDist) {
+      bestDist = d;
+      best = t;
+    }
+  }
+  return best;
+}
+
 function handleKeyDown(event) {
   if (event.code === 'Space') {
-    if (state.animating || !state.dragon || state.dragon.defeated || state.gameOver) return;
-    event.preventDefault();
-    const range = lineOfSightDistance(state.grid, state.cols, state.rows, state.player, state.dragon.pos);
-    if (range > FIREBALL_RANGE) return; // dragon out of range or blocked by a wall
+    if (state.animating || state.gameOver) return;
+    const target = getFireballTarget();
+    if (!target) return; // nothing in range or blocked by a wall
     if (state.mana < 1) return; // out of mana
-    castFireball();
+    event.preventDefault();
+    castFireball(target);
     return;
   }
 
@@ -796,7 +1044,7 @@ function handleKeyDown(event) {
         onLevelComplete();
         return;
       }
-      resolveDragonTurn(() => {
+      resolveMobTurns(() => {
         state.animating = false;
       });
     } catch (err) {
@@ -806,28 +1054,29 @@ function handleKeyDown(event) {
   });
 }
 
-// Fires a fireball at the dragon; consumes one player move, same as an
-// arrow-key move, and shares the same dragon-turn resolution.
-function castFireball() {
+// Fires a fireball at `target` (the dragon or Karryhane); consumes one
+// player move and 1 mana, same as an arrow-key move, and shares the same
+// mob-turn resolution.
+function castFireball(target) {
   state.mana -= 1;
   updateManaDisplay();
   state.animating = true;
   const from = { x: state.player.x, y: state.player.y };
-  const to = { x: state.dragon.pos.x, y: state.dragon.pos.y };
+  const to = { x: target.pos.x, y: target.pos.y };
 
   startFireballAnimation(from, to, () => {
-    applyFireballDamage();
-    resolveDragonTurn(() => {
+    applyFireballDamage(target.kind);
+    resolveMobTurns(() => {
       state.animating = false;
     });
   });
 }
 
-// Passes the player's turn with no action — lets the dragon act (approach,
-// breathe fire) without the player moving or attacking.
+// Passes the player's turn with no action — lets the mobs act (approach,
+// attack) without the player moving or attacking.
 function skipTurn() {
   state.animating = true;
-  resolveDragonTurn(() => {
+  resolveMobTurns(() => {
     state.animating = false;
   });
 }
@@ -840,40 +1089,60 @@ function castHeal() {
   state.health = Math.min(100, state.health + HEAL_AMOUNT);
   updateManaDisplay();
   updateHealthDisplay();
-  resolveDragonTurn(() => {
+  resolveMobTurns(() => {
     state.animating = false;
   });
 }
 
-function applyFireballDamage() {
+function applyFireballDamage(kind) {
   const damage = 20 + Math.floor(Math.random() * 81); // 20-100 inclusive
-  state.dragon.health = Math.max(0, state.dragon.health - damage);
-  updateDragonHealthDisplay();
-
-  if (state.dragon.health <= 0) onDragonDefeated();
+  damageTarget(kind, damage);
 }
 
-// Resolves the dragon's turn (wake check, then breathe-or-move action)
-// after a player action. Both the arrow-move and fireball-cast paths call
-// this so the dragon always gets a turn back. Fire breath is free and can
-// happen every turn; chasing moves at half the player's speed (one step
-// per two player turns) via dragon.moveCounter.
-function resolveDragonTurn(onDone) {
+// Advances the turn counter (which also drives the player's and Karryhane's
+// mana regen), then gives the dragon and Karryhane their turn in sequence.
+// All three player actions (move, skip, fireball, heal) route through this
+// so every mob turn is accounted for exactly once per player action.
+function resolveMobTurns(onDone) {
   state.turnCount += 1;
   if (state.turnCount % 5 === 0 && state.mana < MAX_MANA) {
     state.mana += 1;
     updateManaDisplay();
   }
+  const karryhane = state.karryhane;
+  if (karryhane.active && !karryhane.defeated && state.turnCount % 5 === 0 && karryhane.mana < karryhane.maxMana) {
+    karryhane.mana += 1;
+  }
+  resolveDragonTurn(() => resolveKarryhaneTurn(onDone));
+}
 
+// Resolves the dragon's turn (wake check, then breathe-or-move action) after
+// a player action. Fire breath is free and can happen every turn; chasing
+// moves at half speed (one step per two player turns) via dragon.moveCounter.
+// The dragon will target Karryhane as readily as the player — whichever is
+// nearer — since it never flees regardless of who it's fighting.
+function resolveDragonTurn(onDone) {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || state.gameOver) {
     onDone();
     return;
   }
 
+  const targets = livingTargetsFor('dragon');
+  if (targets.length === 0) {
+    onDone();
+    return;
+  }
+
+  const nearestOf = (fromPos) =>
+    targets.reduce((best, t) => {
+      const d = gridDistance(fromPos, t.pos);
+      return !best || d < best.d ? { t, d } : best;
+    }, null);
+
   if (!dragon.awake) {
-    const distance = gridDistance(state.player, dragon.pos);
-    if (distance <= dragon.triggerDistance) dragon.awake = true;
+    const nearest = nearestOf(dragon.pos);
+    if (nearest.d <= dragon.triggerDistance) dragon.awake = true;
   }
 
   if (!dragon.awake) {
@@ -881,26 +1150,171 @@ function resolveDragonTurn(onDone) {
     return;
   }
 
-  const sightRange = lineOfSightDistance(state.grid, state.cols, state.rows, dragon.pos, state.player);
+  let breathTarget = null;
+  let breathDist = Infinity;
+  for (const t of targets) {
+    const d = lineOfSightDistance(state.grid, state.cols, state.rows, dragon.pos, t.pos);
+    if (d <= DRAGON_BREATH_RANGE && d < breathDist) {
+      breathDist = d;
+      breathTarget = t;
+    }
+  }
 
-  if (sightRange <= DRAGON_BREATH_RANGE) {
+  if (breathTarget) {
     const from = { x: dragon.pos.x, y: dragon.pos.y };
-    const to = { x: state.player.x, y: state.player.y };
+    const to = { x: breathTarget.pos.x, y: breathTarget.pos.y };
     startFireBreathAnimation(from, to, () => {
-      applyDragonFireDamage();
+      applyDragonFireDamage(breathTarget.kind);
       if (!state.gameOver) onDone();
     });
   } else {
     dragon.moveCounter += 1;
     if (dragon.moveCounter % 2 === 0) {
-      const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
+      const nearest = nearestOf(dragon.pos);
+      const result = bfsFrom(state.grid, state.cols, state.rows, nearest.t.pos);
       const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
       if (entry && entry.prev) dragon.pos = entry.prev;
       updateDragonSighting();
+      updateKarryhaneSighting();
       render();
     }
     onDone();
   }
+}
+
+// Resolves Karryhane's turn: cast lightning on the nearest in-range target
+// (player or dragon) if he has the mana; otherwise chase a sensed target,
+// heal himself when nothing threatens, or wander. At or below half health he
+// tries to flee from anything in lightning range instead of engaging — but
+// if backed into a dead end with no escape route that increases his distance
+// from every threat, he stands and fights rather than uselessly bumping the
+// wall.
+function resolveKarryhaneTurn(onDone) {
+  const karryhane = state.karryhane;
+  if (!karryhane.active && !karryhane.defeated && state.turnCount >= KARRYHANE_SPAWN_DELAY_TURNS) {
+    karryhane.active = true; // materialises at the maze entrance, spawnKarryhane's default pos
+  }
+
+  if (!karryhane.active || karryhane.defeated || state.gameOver) {
+    onDone();
+    return;
+  }
+
+  const targets = livingTargetsFor('karryhane');
+  if (targets.length === 0) {
+    onDone();
+    return;
+  }
+
+  let nearestInRange = null;
+  let nearestInRangeDist = Infinity;
+  for (const t of targets) {
+    const d = lineOfSightDistance(state.grid, state.cols, state.rows, karryhane.pos, t.pos);
+    if (d <= KARRYHANE_LIGHTNING_RANGE && d < nearestInRangeDist) {
+      nearestInRangeDist = d;
+      nearestInRange = t;
+    }
+  }
+
+  const lowHealth = karryhane.health <= karryhane.maxHealth * KARRYHANE_FLEE_RATIO;
+
+  if (lowHealth && nearestInRange) {
+    const neighbours = getOpenNeighbours(state.grid, karryhane.pos.x, karryhane.pos.y, state.cols, state.rows);
+    const minDistFrom = (pos) => Math.min(...targets.map((t) => gridDistance(pos, t.pos)));
+    const currentDist = minDistFrom(karryhane.pos);
+
+    let fleeTo = null;
+    let fleeDist = currentDist;
+    for (const n of neighbours) {
+      const d = minDistFrom(n);
+      if (d > fleeDist) {
+        fleeDist = d;
+        fleeTo = n;
+      }
+    }
+
+    if (fleeTo) {
+      karryhane.pos = fleeTo;
+      updateKarryhaneSighting();
+      render();
+      onDone();
+      return;
+    }
+
+    // Cornered — no escape improves his distance, so he fights instead.
+    if (karryhane.mana >= KARRYHANE_SPELL_COST) {
+      castKarryhaneLightning(nearestInRange, onDone);
+      return;
+    }
+    onDone();
+    return;
+  }
+
+  if (!lowHealth) {
+    if (nearestInRange && karryhane.mana >= KARRYHANE_SPELL_COST) {
+      castKarryhaneLightning(nearestInRange, onDone);
+      return;
+    }
+
+    let nearestSensed = null;
+    let nearestSensedDist = Infinity;
+    for (const t of targets) {
+      const d = gridDistance(karryhane.pos, t.pos);
+      if (d <= KARRYHANE_SENSE_RADIUS && d < nearestSensedDist) {
+        nearestSensedDist = d;
+        nearestSensed = t;
+      }
+    }
+
+    if (nearestSensed) {
+      const result = bfsFrom(state.grid, state.cols, state.rows, nearestSensed.pos);
+      const entry = result.get(`${karryhane.pos.x},${karryhane.pos.y}`);
+      if (entry && entry.prev) karryhane.pos = entry.prev;
+      updateKarryhaneSighting();
+      render();
+      onDone();
+      return;
+    }
+  }
+
+  // Nothing in range or sensed (or low health with nothing threatening): heal
+  // up if he can, otherwise wander.
+  if (karryhane.mana >= KARRYHANE_SPELL_COST && karryhane.health < karryhane.maxHealth) {
+    castKarryhaneHeal(onDone);
+    return;
+  }
+
+  wanderKarryhane();
+  onDone();
+}
+
+function castKarryhaneLightning(target, onDone) {
+  const karryhane = state.karryhane;
+  karryhane.mana -= KARRYHANE_SPELL_COST;
+  const from = { x: karryhane.pos.x, y: karryhane.pos.y };
+  const to = { x: target.pos.x, y: target.pos.y };
+
+  startLightningAnimation(from, to, () => {
+    damageTarget(target.kind, KARRYHANE_LIGHTNING_DAMAGE);
+    if (!state.gameOver) onDone();
+  });
+}
+
+function castKarryhaneHeal(onDone) {
+  const karryhane = state.karryhane;
+  karryhane.mana -= KARRYHANE_SPELL_COST;
+  karryhane.health = Math.min(karryhane.maxHealth, karryhane.health + KARRYHANE_HEAL_AMOUNT);
+  updateKarryhaneHealthDisplay();
+  startHealFxAnimation({ x: karryhane.pos.x, y: karryhane.pos.y }, onDone);
+}
+
+function wanderKarryhane() {
+  const karryhane = state.karryhane;
+  const neighbours = getOpenNeighbours(state.grid, karryhane.pos.x, karryhane.pos.y, state.cols, state.rows);
+  if (neighbours.length === 0) return;
+  karryhane.pos = neighbours[Math.floor(Math.random() * neighbours.length)];
+  updateKarryhaneSighting();
+  render();
 }
 
 // Checks whether the player's current cell holds an untriggered trap; if so,
@@ -922,16 +1336,10 @@ function checkTrap() {
   }
 }
 
-// Same damage/game-over pattern as checkTrap, for the dragon's fire breath.
-function applyDragonFireDamage() {
+// Same damage pattern as checkTrap, for the dragon's fire breath.
+function applyDragonFireDamage(kind) {
   const damage = Math.floor(Math.random() * 51); // 0-50 inclusive
-  state.health = Math.max(0, state.health - damage);
-  updateHealthDisplay();
-
-  if (state.health <= 0) {
-    state.animating = false;
-    onGameOver();
-  }
+  damageTarget(kind, damage);
 }
 
 // Just removes the threat — no reward, no bonus. Reaching the exit remains
@@ -940,8 +1348,15 @@ function onDragonDefeated() {
   const dragon = state.dragon;
   dragon.defeated = true;
   dragon.fireBreath = null;
-  dragon.fireball = null;
   updateDragonHealthDisplay();
+}
+
+function onKarryhaneDefeated() {
+  const karryhane = state.karryhane;
+  karryhane.defeated = true;
+  karryhane.lightningBolt = null;
+  karryhane.healFx = null;
+  updateKarryhaneHealthDisplay();
 }
 
 function onGameOver() {
@@ -956,6 +1371,7 @@ restartBtn.addEventListener('click', () => {
   state.health = 100;
   state.mana = MAX_MANA;
   state.turnCount = 0;
+  state.karryhaneIsLich = false;
   state.gameOver = false;
   startLevel(1);
   render();
@@ -1005,6 +1421,9 @@ function startLevel(level) {
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
+  if (state.karryhane && state.karryhane.defeated) state.karryhaneIsLich = true;
+  state.karryhane = spawnKarryhane(state.karryhaneIsLich);
+  state.turnCount = 0;
   updateDragonSighting();
 }
 
