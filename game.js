@@ -52,6 +52,7 @@ const state = {
   gameOver: false,
   dragon: null, // null below DRAGON_MIN_LEVEL, or after respawn each level — see spawnDragon
   karryhane: null, // re-rolled every level — see spawnKarryhane
+  karryhaneIsLich: false, // set permanently for the rest of the run once he's first killed
   playerFireball: null, // in-flight fireball animation state, whoever the target is
 };
 
@@ -300,8 +301,10 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
 // Karryhane always exists from level start, but stays inactive (off the
 // board, not rendered, no turn taken) until KARRYHANE_SPAWN_DELAY_TURNS have
 // elapsed — see resolveKarryhaneTurn. He then enters at the maze entrance,
-// same as the player.
-function spawnKarryhane() {
+// same as the player. Once killed, he returns every level after as a Lich —
+// same stats and AI, just a permanent identity/appearance change (set via
+// state.karryhaneIsLich in startLevel) — and can be killed again freely.
+function spawnKarryhane(isLich) {
   return {
     pos: { x: 0, y: 0 },
     health: KARRYHANE_MAX_HEALTH,
@@ -311,6 +314,7 @@ function spawnKarryhane() {
     active: false,
     defeated: false,
     sighted: false,
+    isLich,
     lightningBolt: null,
     healFx: null,
   };
@@ -587,7 +591,14 @@ function drawKarryhane() {
   const cy = karryhane.pos.y * cellSize + cellSize / 2;
   const s = cellSize * 0.3;
 
-  ctx.fillStyle = '#241a1a';
+  // The Lich (post-death reincarnation) swaps the fleshy head/robe trim for
+  // a bare skull and a sickly green glow, so he reads as a different
+  // creature at a glance despite sharing the same silhouette and stats.
+  const robe = '#241a1a';
+  const head = karryhane.isLich ? '#d8e8d8' : '#c9a688';
+  const trim = karryhane.isLich ? '#5fe07a' : '#d13b3b';
+
+  ctx.fillStyle = robe;
   ctx.beginPath();
   ctx.moveTo(cx, cy - s * 0.1);
   ctx.lineTo(cx - s * 0.75, cy + s);
@@ -595,12 +606,12 @@ function drawKarryhane() {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = '#c9a688';
+  ctx.fillStyle = head;
   ctx.beginPath();
   ctx.arc(cx, cy - s * 0.35, s * 0.35, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = '#241a1a';
+  ctx.fillStyle = robe;
   ctx.beginPath();
   ctx.moveTo(cx, cy - s * 1.5);
   ctx.lineTo(cx - s * 0.55, cy - s * 0.25);
@@ -608,7 +619,7 @@ function drawKarryhane() {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = '#d13b3b';
+  ctx.fillStyle = trim;
   ctx.beginPath();
   ctx.arc(cx, cy - s * 0.6, s * 0.1, 0, Math.PI * 2);
   ctx.fill();
@@ -856,7 +867,7 @@ function updateKarryhaneHealthDisplay() {
     return;
   }
   karryhaneEntry.classList.remove('hidden');
-  karryhaneNameEl.textContent = karryhane.sighted ? 'Karryhane' : '???';
+  karryhaneNameEl.textContent = karryhane.sighted ? (karryhane.isLich ? 'The Lich Karryhane' : 'Karryhane') : '???';
   const pct = Math.max(0, Math.round((karryhane.health / karryhane.maxHealth) * 100));
   karryhaneHealthFill.style.width = `${pct}%`;
 }
@@ -1356,6 +1367,7 @@ restartBtn.addEventListener('click', () => {
   state.health = 100;
   state.mana = MAX_MANA;
   state.turnCount = 0;
+  state.karryhaneIsLich = false;
   state.gameOver = false;
   startLevel(1);
   render();
@@ -1405,7 +1417,8 @@ function startLevel(level) {
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
-  state.karryhane = spawnKarryhane();
+  if (state.karryhane && state.karryhane.defeated) state.karryhaneIsLich = true;
+  state.karryhane = spawnKarryhane(state.karryhaneIsLich);
   state.turnCount = 0;
   updateDragonSighting();
 }
