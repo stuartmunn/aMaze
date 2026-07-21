@@ -251,6 +251,7 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
     maxHealth,
     awake: false,
     triggerDistance,
+    moveCounter: 0,
     defeated: false,
     fireBreath: null,
     fireball: null,
@@ -271,10 +272,20 @@ function getFogRadius(level) {
   return Math.max(FOG_MIN_RADIUS, 8 - (level - FOG_START_LEVEL));
 }
 
+// How fogged a cell is: 0 = fully clear, 1 = fully hidden. Cells beyond
+// fogRadius fade in over FOG_BAND cells rather than cutting off sharply,
+// and distance is Euclidean (not Chebyshev) so the revealed area reads as
+// a circle rather than a square.
+const FOG_BAND = 1.5;
+
+function fogAmount(x, y) {
+  if (state.fogRadius === null) return 0;
+  const d = gridDistance({ x, y }, state.displayPlayer);
+  return Math.max(0, Math.min(1, (d - state.fogRadius) / FOG_BAND));
+}
+
 function isVisible(x, y) {
-  if (state.fogRadius === null) return true;
-  const { displayPlayer } = state;
-  return Math.max(Math.abs(x - displayPlayer.x), Math.abs(y - displayPlayer.y)) <= state.fogRadius;
+  return fogAmount(x, y) < 1;
 }
 
 // Masonry shades for wall blocks — picked deterministically per block (from
@@ -350,13 +361,14 @@ function drawWalls() {
       const px = x * cellSize;
       const py = y * cellSize;
 
-      if (!isVisible(x, y)) {
-        ctx.fillStyle = '#161622'; // unrevealed cell — solid fog
-        ctx.fillRect(px, py, cellSize, cellSize);
+      const seedBase = x * 31 + y * 17;
+      const amount = fogAmount(x, y);
+
+      if (amount >= 1) {
+        drawMist(px, py, cellSize, seedBase, 1);
         continue;
       }
 
-      const seedBase = x * 31 + y * 17;
       drawFlagstoneFloor(px, py, cellSize, seedBase);
 
       const cell = grid[y][x];
@@ -368,7 +380,45 @@ function drawWalls() {
 
       const trap = state.traps.get(`${x},${y}`);
       if (trap && trap.triggered) drawExplosion(px, py, cellSize);
+
+      if (amount > 0) drawMist(px, py, cellSize, seedBase, amount);
     }
+  }
+}
+
+// Deterministic pseudo-random in [0, 1) from a seed, so blob positions stay
+// stable across redraws instead of flickering during the slide animation.
+function mistRand(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+// Mist/fog texture for a fogged cell: a dark base wash plus a few soft,
+// blurred grey-white blobs (radial gradients) at pseudo-random offsets.
+// `amount` (0-1) scales opacity so the effect fades in at the fog boundary
+// rather than cutting off sharply.
+const MIST_BLOB_COUNT = 3;
+
+function drawMist(px, py, cellSize, seedBase, amount) {
+  ctx.fillStyle = `rgba(22, 22, 34, ${amount})`;
+  ctx.fillRect(px, py, cellSize, cellSize);
+
+  for (let i = 0; i < MIST_BLOB_COUNT; i++) {
+    const rx = mistRand(seedBase + i * 13.1);
+    const ry = mistRand(seedBase + i * 27.7 + 5);
+    const rr = 0.35 + mistRand(seedBase + i * 41.3 + 9) * 0.35;
+    const cx = px + rx * cellSize;
+    const cy = py + ry * cellSize;
+    const radius = rr * cellSize;
+
+    const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    gradient.addColorStop(0, `rgba(210, 214, 224, ${0.35 * amount})`);
+    gradient.addColorStop(1, 'rgba(210, 214, 224, 0)');
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
@@ -733,9 +783,11 @@ function applyFireballDamage() {
   if (state.dragon.health <= 0) onDragonDefeated();
 }
 
-// Resolves the dragon's turn (wake check, then move-or-breathe action)
+// Resolves the dragon's turn (wake check, then breathe-or-move action)
 // after a player action. Both the arrow-move and fireball-cast paths call
-// this so the dragon always gets a turn back.
+// this so the dragon always gets a turn back. Fire breath is free and can
+// happen every turn; chasing moves at half the player's speed (one step
+// per two player turns) via dragon.moveCounter.
 function resolveDragonTurn(onDone) {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || state.gameOver) {
@@ -763,10 +815,13 @@ function resolveDragonTurn(onDone) {
       if (!state.gameOver) onDone();
     });
   } else {
-    const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
-    const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
-    if (entry && entry.prev) dragon.pos = entry.prev;
-    render();
+    dragon.moveCounter += 1;
+    if (dragon.moveCounter % 2 === 0) {
+      const result = bfsFrom(state.grid, state.cols, state.rows, state.player);
+      const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
+      if (entry && entry.prev) dragon.pos = entry.prev;
+      render();
+    }
     onDone();
   }
 }
