@@ -458,6 +458,7 @@ const STAIR_STEP_SHADES = ['#a8a8a8', '#87877e', '#666660', '#454542', '#242220'
 
 function drawExit() {
   const { exit, cellSize } = state;
+  if (!isVisible(exit.x, exit.y)) return;
   const cx = exit.x * cellSize + cellSize / 2;
   const cy = exit.y * cellSize + cellSize / 2;
   const steps = STAIR_STEP_SHADES.length;
@@ -937,6 +938,16 @@ window.addEventListener('resize', render); // re-fit the canvas if the window is
 const STARTING_SIZE = 8;
 const SIZE_GROWTH_PER_LEVEL = 2;
 
+// Player always starts top-left; exit picks one of the other 3 corners at random.
+function pickRandomExitCorner(cols, rows) {
+  const corners = [
+    { x: cols - 1, y: 0 },
+    { x: 0, y: rows - 1 },
+    { x: cols - 1, y: rows - 1 },
+  ];
+  return corners[Math.floor(Math.random() * corners.length)];
+}
+
 function startLevel(level) {
   state.level = level;
   state.cols = STARTING_SIZE + (level - 1) * SIZE_GROWTH_PER_LEVEL;
@@ -944,7 +955,7 @@ function startLevel(level) {
   state.grid = generateMaze(state.cols, state.rows);
   state.player = { x: 0, y: 0 }; // fixed start: top-left
   state.displayPlayer = { x: 0, y: 0 };
-  state.exit = { x: state.cols - 1, y: state.rows - 1 }; // opposite corner
+  state.exit = pickRandomExitCorner(state.cols, state.rows);
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
