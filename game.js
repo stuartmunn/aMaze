@@ -43,7 +43,6 @@ const state = {
   traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
   gameOver: false,
   dragon: null, // null below DRAGON_MIN_LEVEL, or after respawn each level — see spawnDragon
-  playerMoveCount: 0, // increments once per resolved player move (arrow move or fireball cast)
 };
 
 // ---------------------------------------------------------------------------
@@ -189,10 +188,11 @@ function bfsFrom(grid, cols, rows, start) {
   return dist;
 }
 
-function bfsDistance(grid, cols, rows, from, to) {
-  const result = bfsFrom(grid, cols, rows, from);
-  const entry = result.get(`${to.x},${to.y}`);
-  return entry ? entry.dist : Infinity; // Infinity is only a safety net — see bfsFrom's connectivity note
+// Straight-line (as-the-crow-flies) distance between two cells, ignoring
+// walls entirely — used for the dragon's sense radius so it can detect the
+// player through walls before it has line of sight or a clear path.
+function gridDistance(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
 // Straight-line distance between two cells sharing a row or column, walking
@@ -613,45 +613,24 @@ const KEY_MOVES = {
   A: { dx: -1, dy: 0, wall: WALL.LEFT },
 };
 
-// The two walls at right angles to a given direction of travel — used to
-// spot side passages so a run can stop at a junction.
-const PERPENDICULAR = {
-  [WALL.TOP]: [WALL.LEFT, WALL.RIGHT],
-  [WALL.BOTTOM]: [WALL.LEFT, WALL.RIGHT],
-  [WALL.LEFT]: [WALL.TOP, WALL.BOTTOM],
-  [WALL.RIGHT]: [WALL.TOP, WALL.BOTTOM],
-};
-
 /**
- * Works out the run along (dx, dy) one cell at a time until the player
- * can't go any further — either a wall blocks the way ahead, or the cell
- * just entered has a side passage open (a choice) — and returns every cell
- * stepped through, start included, for the caller to animate along.
- * Updates state.player (the logical position) to the final cell.
+ * Steps the player exactly one cell in (dx, dy) if the wall in that
+ * direction isn't blocking — one key press, one tile, so the dragon's turn
+ * cadence can't be outrun by a free multi-tile corridor slide. Returns the
+ * one- or two-cell path (start included) for the caller to animate along,
+ * or a single-cell path if blocked. Updates state.player on a successful move.
  */
 function computeMovePath(dx, dy, wall) {
-  const { grid, exit } = state;
-  const perpWalls = PERPENDICULAR[wall];
-  let x = state.player.x;
-  let y = state.player.y;
-  const path = [{ x, y }];
+  const { grid } = state;
+  const x = state.player.x;
+  const y = state.player.y;
+  const cell = grid[y][x];
 
-  while (true) {
-    const cell = grid[y][x];
-    if (cell.walls & wall) break; // wall ahead — stop
+  if (cell.walls & wall) return [{ x, y }]; // wall ahead — blocked
 
-    x += dx;
-    y += dy;
-    path.push({ x, y });
-
-    if (x === exit.x && y === exit.y) break; // stop at exit
-
-    const nextCell = grid[y][x];
-    if (perpWalls.some((w) => !(nextCell.walls & w))) break; // junction — let player choose
-  }
-
-  state.player = { x, y };
-  return path;
+  const next = { x: x + dx, y: y + dy };
+  state.player = next;
+  return [{ x, y }, next];
 }
 
 const MS_PER_CELL = 70; // animation speed for sliding between cells
@@ -721,7 +700,7 @@ function handleKeyDown(event) {
         onLevelComplete();
         return;
       }
-      advanceTurn(() => {
+      resolveDragonTurn(() => {
         state.animating = false;
       });
     } catch (err) {
@@ -732,7 +711,7 @@ function handleKeyDown(event) {
 }
 
 // Fires a fireball at the dragon; consumes one player move, same as an
-// arrow-key move, and shares the same dragon-turn cadence via advanceTurn.
+// arrow-key move, and shares the same dragon-turn resolution.
 function castFireball() {
   state.animating = true;
   const from = { x: state.player.x, y: state.player.y };
@@ -740,7 +719,7 @@ function castFireball() {
 
   startFireballAnimation(from, to, () => {
     applyFireballDamage();
-    advanceTurn(() => {
+    resolveDragonTurn(() => {
       state.animating = false;
     });
   });
@@ -754,14 +733,9 @@ function applyFireballDamage() {
   if (state.dragon.health <= 0) onDragonDefeated();
 }
 
-// Advances the shared player-move counter and resolves the dragon's turn
-// (wake check every move; move-or-breathe action every 2nd move). Both the
-// arrow-move and fireball-cast paths call this so the cadence can't desync.
-function advanceTurn(onDone) {
-  state.playerMoveCount += 1;
-  resolveDragonTurn(onDone);
-}
-
+// Resolves the dragon's turn (wake check, then move-or-breathe action)
+// after a player action. Both the arrow-move and fireball-cast paths call
+// this so the dragon always gets a turn back.
 function resolveDragonTurn(onDone) {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || state.gameOver) {
@@ -770,11 +744,11 @@ function resolveDragonTurn(onDone) {
   }
 
   if (!dragon.awake) {
-    const distance = bfsDistance(state.grid, state.cols, state.rows, state.player, dragon.pos);
+    const distance = gridDistance(state.player, dragon.pos);
     if (distance <= dragon.triggerDistance) dragon.awake = true;
   }
 
-  if (!dragon.awake || state.playerMoveCount % 2 !== 0) {
+  if (!dragon.awake) {
     onDone();
     return;
   }
@@ -887,7 +861,6 @@ function startLevel(level) {
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
-  state.playerMoveCount = 0;
 }
 
 startLevel(1);
