@@ -725,6 +725,13 @@ function handleKeyDown(event) {
     return;
   }
 
+  if (event.code === 'Period') {
+    if (state.animating || state.gameOver) return;
+    event.preventDefault();
+    skipTurn();
+    return;
+  }
+
   const move = KEY_MOVES[event.key];
   if (!move || state.animating) return;
 
@@ -772,6 +779,15 @@ function castFireball() {
     resolveDragonTurn(() => {
       state.animating = false;
     });
+  });
+}
+
+// Passes the player's turn with no action — lets the dragon act (approach,
+// breathe fire) without the player moving or attacking.
+function skipTurn() {
+  state.animating = true;
+  resolveDragonTurn(() => {
+    state.animating = false;
   });
 }
 
