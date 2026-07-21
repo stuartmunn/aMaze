@@ -14,7 +14,8 @@ const healthFill = document.getElementById('health-fill');
 const healthText = document.getElementById('health-text');
 const gameOverOverlay = document.getElementById('game-over-overlay');
 const restartBtn = document.getElementById('restart-btn');
-const dragonHealthBar = document.getElementById('dragon-health-bar');
+const dragonEntry = document.getElementById('dragon-entry');
+const dragonNameEl = document.getElementById('dragon-name');
 const dragonHealthFill = document.getElementById('dragon-health-fill');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
@@ -253,6 +254,7 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
     triggerDistance,
     moveCounter: 0,
     defeated: false,
+    sighted: false, // becomes true once the player has seen it on screen; name then replaces '???'
     fireBreath: null,
     fireball: null,
   };
@@ -615,6 +617,11 @@ function render() {
   canvas.width = state.cellSize * state.cols;
   canvas.height = state.cellSize * state.rows;
   levelDisplay.textContent = `Level ${state.level}`;
+
+  if (state.dragon && !state.dragon.defeated && isVisible(state.dragon.pos.x, state.dragon.pos.y)) {
+    state.dragon.sighted = true;
+  }
+
   updateHealthDisplay();
   updateDragonHealthDisplay();
 
@@ -636,10 +643,11 @@ function updateHealthDisplay() {
 function updateDragonHealthDisplay() {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated) {
-    dragonHealthBar.classList.add('hidden');
+    dragonEntry.classList.add('hidden');
     return;
   }
-  dragonHealthBar.classList.remove('hidden');
+  dragonEntry.classList.remove('hidden');
+  dragonNameEl.textContent = dragon.sighted ? 'Dragon' : '???';
   const pct = Math.max(0, Math.round((dragon.health / dragon.maxHealth) * 100));
   dragonHealthFill.style.width = `${pct}%`;
 }

@@ -15,9 +15,9 @@ body {
 
 .game-wrapper {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 1.5rem;
   padding: 1rem;
 }
 
@@ -26,12 +26,45 @@ h1 {
   letter-spacing: 0.05em;
 }
 
-.hud {
-  font-size: 1.1rem;
-  font-weight: 600;
+.center-column {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
+}
+
+.side-panel {
+  width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 2.5rem; /* roughly align with center-column content, below the h1 */
+}
+
+.side-panel h2,
+.mob-entry h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.mob-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stat-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  opacity: 0.85;
 }
 
 .health-bar {
@@ -68,10 +101,6 @@ h1 {
   border-color: #3a6a3a;
 }
 
-#dragon-health-bar.hidden {
-  display: none;
-}
-
 #dragon-health-fill {
   height: 100%;
   width: 100%;
@@ -87,6 +116,10 @@ h1 {
   justify-content: center;
   background: rgba(10, 10, 16, 0.8);
   z-index: 10;
+}
+
+.hidden {
+  display: none;
 }
 
 #game-over-overlay.hidden {

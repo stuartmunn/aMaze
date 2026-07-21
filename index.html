@@ -8,18 +8,34 @@
 </head>
 <body>
   <main class="game-wrapper">
-    <h1>aMaze</h1>
-    <div class="hud">
-      <span id="level-display">Level 1</span>
-      <div class="health-bar">
-        <div id="health-fill"></div>
-        <span id="health-text">100</span>
-      </div>
-      <div id="dragon-health-bar" class="health-bar dragon-health-bar hidden">
-        <div id="dragon-health-fill"></div>
+    <div class="side-panel player-info">
+      <h2>Player</h2>
+      <div class="stat-row">
+        <span class="stat-label">Health</span>
+        <div class="health-bar">
+          <div id="health-fill"></div>
+          <span id="health-text">100</span>
+        </div>
       </div>
     </div>
-    <canvas id="maze-canvas"></canvas>
+
+    <div class="center-column">
+      <h1>aMaze</h1>
+      <span id="level-display">Level 1</span>
+      <canvas id="maze-canvas"></canvas>
+    </div>
+
+    <div class="side-panel mob-info">
+      <div class="mob-entry hidden" id="dragon-entry">
+        <h2 id="dragon-name">???</h2>
+        <div class="stat-row">
+          <span class="stat-label">Health</span>
+          <div id="dragon-health-bar" class="health-bar dragon-health-bar">
+            <div id="dragon-health-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
   <div id="game-over-overlay" class="hidden">
     <div class="game-over-box">
