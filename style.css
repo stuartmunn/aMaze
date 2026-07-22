@@ -120,11 +120,11 @@ h1 {
   transition: width 0.2s ease-out;
 }
 
-.karryhane-health-bar {
+.nigel-health-bar {
   border-color: #6a3a8a;
 }
 
-#karryhane-health-fill {
+#nigel-health-fill {
   height: 100%;
   width: 100%;
   background: #9b4fd1;

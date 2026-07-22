@@ -19,9 +19,9 @@ const restartBtn = document.getElementById('restart-btn');
 const dragonEntry = document.getElementById('dragon-entry');
 const dragonNameEl = document.getElementById('dragon-name');
 const dragonHealthFill = document.getElementById('dragon-health-fill');
-const karryhaneEntry = document.getElementById('karryhane-entry');
-const karryhaneNameEl = document.getElementById('karryhane-name');
-const karryhaneHealthFill = document.getElementById('karryhane-health-fill');
+const nigelEntry = document.getElementById('nigel-entry');
+const nigelNameEl = document.getElementById('nigel-name');
+const nigelHealthFill = document.getElementById('nigel-health-fill');
 const turnEventsEl = document.getElementById('turn-events');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
@@ -49,12 +49,12 @@ const state = {
   health: 100, // persists across levels; only resets on restart after game over
   mana: 10, // persists across levels; only resets on restart after game over
   turnEvents: [], // this-turn-only messages; cleared at the start of each player action
-  turnCount: 0, // increments once per player action — drives mana regen and gates Karryhane's spawn
+  turnCount: 0, // increments once per player action — drives mana regen and gates Nigel's spawn
   traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
   gameOver: false,
   dragon: null, // null below DRAGON_MIN_LEVEL, or after respawn each level — see spawnDragon
-  karryhane: null, // re-rolled every level — see spawnKarryhane
-  karryhaneIsLich: false, // set permanently for the rest of the run once he's first killed
+  nigel: null, // re-rolled every level — see spawnNigel
+  nigelIsLich: false, // set permanently for the rest of the run once he's first killed
   playerFireball: null, // in-flight fireball animation state, whoever the target is
 };
 
@@ -171,15 +171,15 @@ const MAX_MANA = 10;
 const HEAL_MANA_COST = 5;
 const HEAL_AMOUNT = 20; // 20% of max health (health is 0-100)
 
-const KARRYHANE_SPAWN_DELAY_TURNS = 10; // turns after level start before he enters the maze
-const KARRYHANE_MAX_HEALTH = 100; // mirrors the player's health
-const KARRYHANE_MAX_MANA = 10;
-const KARRYHANE_SPELL_COST = 1; // mana per lightning bolt or heal
-const KARRYHANE_LIGHTNING_RANGE = 3; // line-of-sight cells, stopped by walls
-const KARRYHANE_LIGHTNING_DAMAGE = 20; // flat, unlike the player's/dragon's randomised damage
-const KARRYHANE_HEAL_AMOUNT = 25;
-const KARRYHANE_FLEE_RATIO = 0.5; // flees (or fights if cornered) at or below this fraction of max health
-const KARRYHANE_SENSE_RADIUS = 6; // straight-line "notices a target" range, mirrors the dragon's triggerDistance
+const NIGEL_SPAWN_DELAY_TURNS = 10; // turns after level start before he enters the maze
+const NIGEL_MAX_HEALTH = 100; // mirrors the player's health
+const NIGEL_MAX_MANA = 10;
+const NIGEL_SPELL_COST = 1; // mana per lightning bolt or heal
+const NIGEL_LIGHTNING_RANGE = 3; // line-of-sight cells, stopped by walls
+const NIGEL_LIGHTNING_DAMAGE = 20; // flat, unlike the player's/dragon's randomised damage
+const NIGEL_HEAL_AMOUNT = 25;
+const NIGEL_FLEE_RATIO = 0.5; // flees (or fights if cornered) at or below this fraction of max health
+const NIGEL_SENSE_RADIUS = 6; // straight-line "notices a target" range, mirrors the dragon's triggerDistance
 
 // Breadth-first search from `start` across the maze graph (an edge exists
 // between two cells only where no wall blocks passage). Returns a map of
@@ -258,7 +258,7 @@ function lineOfSightDistance(grid, cols, rows, a, b) {
 }
 
 // Cells reachable in one step from (x, y) — i.e. neighbours not blocked by a
-// wall. Used for Karryhane's wander/flee movement (unlike the dragon, which
+// wall. Used for Nigel's wander/flee movement (unlike the dragon, which
 // only ever moves via BFS-toward-target).
 function getOpenNeighbours(grid, x, y, cols, rows) {
   const cell = grid[y][x];
@@ -300,19 +300,19 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
   };
 }
 
-// Karryhane always exists from level start, but stays inactive (off the
-// board, not rendered, no turn taken) until KARRYHANE_SPAWN_DELAY_TURNS have
-// elapsed — see resolveKarryhaneTurn. He then enters at the maze entrance,
+// Nigel always exists from level start, but stays inactive (off the
+// board, not rendered, no turn taken) until NIGEL_SPAWN_DELAY_TURNS have
+// elapsed — see resolveNigelTurn. He then enters at the maze entrance,
 // same as the player. Once killed, he returns every level after as a Lich —
 // same stats and AI, just a permanent identity/appearance change (set via
-// state.karryhaneIsLich in startLevel) — and can be killed again freely.
-function spawnKarryhane(isLich) {
+// state.nigelIsLich in startLevel) — and can be killed again freely.
+function spawnNigel(isLich) {
   return {
     pos: { x: 0, y: 0 },
-    health: KARRYHANE_MAX_HEALTH,
-    maxHealth: KARRYHANE_MAX_HEALTH,
-    mana: KARRYHANE_MAX_MANA,
-    maxMana: KARRYHANE_MAX_MANA,
+    health: NIGEL_MAX_HEALTH,
+    maxHealth: NIGEL_MAX_HEALTH,
+    mana: NIGEL_MAX_MANA,
+    maxMana: NIGEL_MAX_MANA,
     active: false,
     defeated: false,
     sighted: false,
@@ -582,23 +582,23 @@ function drawDragon() {
   ctx.fillText('🐉', cx, cy);
 }
 
-// Karryhane's dark counterpart to drawPlayer: same silhouette, black-and-red
+// Nigel's dark counterpart to drawPlayer: same silhouette, black-and-red
 // palette, no star trim — reads as a corrupted mirror of the player's sprite
 // rather than another emoji stamp.
-function drawKarryhane() {
-  const { karryhane, cellSize } = state;
-  if (!isVisible(karryhane.pos.x, karryhane.pos.y)) return;
+function drawNigel() {
+  const { nigel, cellSize } = state;
+  if (!isVisible(nigel.pos.x, nigel.pos.y)) return;
 
-  const cx = karryhane.pos.x * cellSize + cellSize / 2;
-  const cy = karryhane.pos.y * cellSize + cellSize / 2;
+  const cx = nigel.pos.x * cellSize + cellSize / 2;
+  const cy = nigel.pos.y * cellSize + cellSize / 2;
   const s = cellSize * 0.3;
 
   // The Lich (post-death reincarnation) swaps the fleshy head/robe trim for
   // a bare skull and a sickly green glow, so he reads as a different
   // creature at a glance despite sharing the same silhouette and stats.
   const robe = '#241a1a';
-  const head = karryhane.isLich ? '#d8e8d8' : '#c9a688';
-  const trim = karryhane.isLich ? '#5fe07a' : '#d13b3b';
+  const head = nigel.isLich ? '#d8e8d8' : '#c9a688';
+  const trim = nigel.isLich ? '#5fe07a' : '#d13b3b';
 
   ctx.fillStyle = robe;
   ctx.beginPath();
@@ -718,7 +718,7 @@ function startFireballAnimation(from, to, onComplete) {
 
 const LIGHTNING_MS = 250;
 
-// Jagged blue-white bolt from Karryhane to his target, built from a few
+// Jagged blue-white bolt from Nigel to his target, built from a few
 // randomised midpoint offsets so it reads as lightning rather than a straight
 // laser. The zigzag points are re-rolled once per cast (stored on the fx
 // object) rather than every frame, so the bolt doesn't crawl while it fades.
@@ -742,16 +742,16 @@ function drawLightningFrame(fx) {
 
 function startLightningAnimation(from, to, onComplete) {
   const jitter = [0.25, 0.5, 0.75].map((frac) => [frac, (Math.random() - 0.5) * state.cellSize * 0.4]);
-  state.karryhane.lightningBolt = { from, to, jitter, startTime: performance.now() };
+  state.nigel.lightningBolt = { from, to, jitter, startTime: performance.now() };
 
   function frame(now) {
-    const t = Math.min((now - state.karryhane.lightningBolt.startTime) / LIGHTNING_MS, 1);
+    const t = Math.min((now - state.nigel.lightningBolt.startTime) / LIGHTNING_MS, 1);
     render();
 
     if (t < 1) {
       requestAnimationFrame(frame);
     } else {
-      state.karryhane.lightningBolt = null;
+      state.nigel.lightningBolt = null;
       render();
       onComplete();
     }
@@ -762,7 +762,7 @@ function startLightningAnimation(from, to, onComplete) {
 
 const HEAL_FX_MS = 400;
 
-// Simple green pulse over Karryhane's cell for self-heals.
+// Simple green pulse over Nigel's cell for self-heals.
 function drawHealFxFrame(fx) {
   const t = Math.min((performance.now() - fx.startTime) / HEAL_FX_MS, 1);
   const { x, y } = cellCentre(fx.at);
@@ -777,16 +777,16 @@ function drawHealFxFrame(fx) {
 }
 
 function startHealFxAnimation(at, onComplete) {
-  state.karryhane.healFx = { at, startTime: performance.now() };
+  state.nigel.healFx = { at, startTime: performance.now() };
 
   function frame(now) {
-    const t = Math.min((now - state.karryhane.healFx.startTime) / HEAL_FX_MS, 1);
+    const t = Math.min((now - state.nigel.healFx.startTime) / HEAL_FX_MS, 1);
     render();
 
     if (t < 1) {
       requestAnimationFrame(frame);
     } else {
-      state.karryhane.healFx = null;
+      state.nigel.healFx = null;
       render();
       onComplete();
     }
@@ -808,18 +808,18 @@ function render() {
   updateHealthDisplay();
   updateManaDisplay();
   updateDragonHealthDisplay();
-  updateKarryhaneHealthDisplay();
+  updateNigelHealthDisplay();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawWalls();
   drawExit();
   if (state.dragon && !state.dragon.defeated) drawDragon();
-  if (state.karryhane && state.karryhane.active && !state.karryhane.defeated) drawKarryhane();
+  if (state.nigel && state.nigel.active && !state.nigel.defeated) drawNigel();
   drawPlayer();
   if (state.dragon && state.dragon.fireBreath) drawFireBreathFrame(state.dragon.fireBreath);
   if (state.playerFireball) drawFireballFrame(state.playerFireball);
-  if (state.karryhane && state.karryhane.lightningBolt) drawLightningFrame(state.karryhane.lightningBolt);
-  if (state.karryhane && state.karryhane.healFx) drawHealFxFrame(state.karryhane.healFx);
+  if (state.nigel && state.nigel.lightningBolt) drawLightningFrame(state.nigel.lightningBolt);
+  if (state.nigel && state.nigel.healFx) drawHealFxFrame(state.nigel.healFx);
 }
 
 // Marks the dragon as sighted once it's actually visible on screen (past the
@@ -835,12 +835,12 @@ function updateDragonSighting() {
   }
 }
 
-function updateKarryhaneSighting() {
-  const karryhane = state.karryhane;
-  if (!karryhane || !karryhane.active || karryhane.defeated || karryhane.sighted) return;
-  if (isVisible(karryhane.pos.x, karryhane.pos.y)) {
-    karryhane.sighted = true;
-    logEvent(karryhane.isLich ? 'The Lich Karryhane detected!' : 'Karryhane detected!');
+function updateNigelSighting() {
+  const nigel = state.nigel;
+  if (!nigel || !nigel.active || nigel.defeated || nigel.sighted) return;
+  if (isVisible(nigel.pos.x, nigel.pos.y)) {
+    nigel.sighted = true;
+    logEvent(`${nigelName(nigel)} detected!`);
   }
 }
 
@@ -868,10 +868,15 @@ function renderTurnEvents() {
   turnEventsEl.textContent = state.turnEvents.length > 0 ? state.turnEvents.join(' ') : ' ';
 }
 
+// Nigel's display name, which permanently changes once he's first killed.
+function nigelName(nigel) {
+  return nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer';
+}
+
 function targetLabel(kind) {
   if (kind === 'player') return 'you';
   if (kind === 'dragon') return 'the dragon';
-  return 'Karryhane';
+  return state.nigel ? nigelName(state.nigel) : 'Nigel the Necromancer';
 }
 
 // `hit` is always true today — no miss roll exists yet — but it's kept as a
@@ -894,16 +899,16 @@ function updateDragonHealthDisplay() {
   dragonHealthFill.style.width = `${pct}%`;
 }
 
-function updateKarryhaneHealthDisplay() {
-  const karryhane = state.karryhane;
-  if (!karryhane || !karryhane.active || karryhane.defeated) {
-    karryhaneEntry.classList.add('hidden');
+function updateNigelHealthDisplay() {
+  const nigel = state.nigel;
+  if (!nigel || !nigel.active || nigel.defeated) {
+    nigelEntry.classList.add('hidden');
     return;
   }
-  karryhaneEntry.classList.remove('hidden');
-  karryhaneNameEl.textContent = karryhane.sighted ? (karryhane.isLich ? 'The Lich Karryhane' : 'Karryhane') : '???';
-  const pct = Math.max(0, Math.round((karryhane.health / karryhane.maxHealth) * 100));
-  karryhaneHealthFill.style.width = `${pct}%`;
+  nigelEntry.classList.remove('hidden');
+  nigelNameEl.textContent = nigel.sighted ? nigelName(nigel) : '???';
+  const pct = Math.max(0, Math.round((nigel.health / nigel.maxHealth) * 100));
+  nigelHealthFill.style.width = `${pct}%`;
 }
 
 // ---------------------------------------------------------------------------
@@ -957,7 +962,7 @@ function animateSegment(from, to, onComplete) {
     const t = Math.min((now - start) / MS_PER_CELL, 1);
     state.displayPlayer = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
     updateDragonSighting();
-    updateKarryhaneSighting();
+    updateNigelSighting();
     render();
 
     if (t < 1) {
@@ -980,19 +985,19 @@ function animatePath(path, index, onDone) {
 }
 
 // All currently-alive combatants other than the one named in `exclude`
-// ('player', 'dragon', or 'karryhane'), each as { kind, pos }. Shared by the
-// dragon's and Karryhane's turn resolution so either can target the other.
+// ('player', 'dragon', or 'nigel'), each as { kind, pos }. Shared by the
+// dragon's and Nigel's turn resolution so either can target the other.
 function livingTargetsFor(exclude) {
   const targets = [];
   if (exclude !== 'player' && !state.gameOver) targets.push({ kind: 'player', pos: state.player });
   if (exclude !== 'dragon' && state.dragon && !state.dragon.defeated) targets.push({ kind: 'dragon', pos: state.dragon.pos });
-  if (exclude !== 'karryhane' && state.karryhane.active && !state.karryhane.defeated) targets.push({ kind: 'karryhane', pos: state.karryhane.pos });
+  if (exclude !== 'nigel' && state.nigel && state.nigel.active && !state.nigel.defeated) targets.push({ kind: 'nigel', pos: state.nigel.pos });
   return targets;
 }
 
 // Applies damage to whichever combatant `kind` names, updating its HUD and
 // triggering its defeat/game-over handling. Shared by the player's fireball,
-// the dragon's fire breath, and Karryhane's lightning.
+// the dragon's fire breath, and Nigel's lightning.
 function damageTarget(kind, amount) {
   if (kind === 'player') {
     state.health = Math.max(0, state.health - amount);
@@ -1005,14 +1010,14 @@ function damageTarget(kind, amount) {
     state.dragon.health = Math.max(0, state.dragon.health - amount);
     updateDragonHealthDisplay();
     if (state.dragon.health <= 0) onDragonDefeated();
-  } else if (kind === 'karryhane') {
-    state.karryhane.health = Math.max(0, state.karryhane.health - amount);
-    updateKarryhaneHealthDisplay();
-    if (state.karryhane.health <= 0) onKarryhaneDefeated();
+  } else if (kind === 'nigel') {
+    state.nigel.health = Math.max(0, state.nigel.health - amount);
+    updateNigelHealthDisplay();
+    if (state.nigel.health <= 0) onNigelDefeated();
   }
 }
 
-// Nearest of the dragon/Karryhane (whichever are alive) within fireball
+// Nearest of the dragon/Nigel (whichever are alive) within fireball
 // range and line of sight, or null if neither qualifies.
 function getFireballTarget() {
   let best = null;
@@ -1090,7 +1095,7 @@ function handleKeyDown(event) {
   });
 }
 
-// Fires a fireball at `target` (the dragon or Karryhane); consumes one
+// Fires a fireball at `target` (the dragon or Nigel); consumes one
 // player move and 1 mana, same as an arrow-key move, and shares the same
 // mob-turn resolution.
 function castFireball(target) {
@@ -1144,8 +1149,8 @@ function applyFireballDamage(kind) {
   damageTarget(kind, damage);
 }
 
-// Advances the turn counter (which also drives the player's and Karryhane's
-// mana regen), then gives the dragon and Karryhane their turn in sequence.
+// Advances the turn counter (which also drives the player's and Nigel's
+// mana regen), then gives the dragon and Nigel their turn in sequence.
 // All three player actions (move, skip, fireball, heal) route through this
 // so every mob turn is accounted for exactly once per player action.
 function resolveMobTurns(onDone) {
@@ -1154,17 +1159,17 @@ function resolveMobTurns(onDone) {
     state.mana += 1;
     updateManaDisplay();
   }
-  const karryhane = state.karryhane;
-  if (karryhane.active && !karryhane.defeated && state.turnCount % 5 === 0 && karryhane.mana < karryhane.maxMana) {
-    karryhane.mana += 1;
+  const nigel = state.nigel;
+  if (nigel && nigel.active && !nigel.defeated && state.turnCount % 5 === 0 && nigel.mana < nigel.maxMana) {
+    nigel.mana += 1;
   }
-  resolveDragonTurn(() => resolveKarryhaneTurn(onDone));
+  resolveDragonTurn(() => resolveNigelTurn(onDone));
 }
 
 // Resolves the dragon's turn (wake check, then breathe-or-move action) after
 // a player action. Fire breath is free and can happen every turn; chasing
 // moves at half speed (one step per two player turns) via dragon.moveCounter.
-// The dragon will target Karryhane as readily as the player — whichever is
+// The dragon will target Nigel as readily as the player — whichever is
 // nearer — since it never flees regardless of who it's fighting.
 function resolveDragonTurn(onDone) {
   const dragon = state.dragon;
@@ -1220,32 +1225,32 @@ function resolveDragonTurn(onDone) {
       const entry = result.get(`${dragon.pos.x},${dragon.pos.y}`);
       if (entry && entry.prev) dragon.pos = entry.prev;
       updateDragonSighting();
-      updateKarryhaneSighting();
+      updateNigelSighting();
       render();
     }
     onDone();
   }
 }
 
-// Resolves Karryhane's turn: cast lightning on the nearest in-range target
+// Resolves Nigel's turn: cast lightning on the nearest in-range target
 // (player or dragon) if he has the mana; otherwise chase a sensed target,
 // heal himself when nothing threatens, or wander. At or below half health he
 // tries to flee from anything in lightning range instead of engaging — but
 // if backed into a dead end with no escape route that increases his distance
 // from every threat, he stands and fights rather than uselessly bumping the
 // wall.
-function resolveKarryhaneTurn(onDone) {
-  const karryhane = state.karryhane;
-  if (!karryhane.active && !karryhane.defeated && state.turnCount >= KARRYHANE_SPAWN_DELAY_TURNS) {
-    karryhane.active = true; // materialises at the maze entrance, spawnKarryhane's default pos
+function resolveNigelTurn(onDone) {
+  const nigel = state.nigel;
+  if (!nigel.active && !nigel.defeated && state.turnCount >= NIGEL_SPAWN_DELAY_TURNS) {
+    nigel.active = true; // materialises at the maze entrance, spawnNigel's default pos
   }
 
-  if (!karryhane.active || karryhane.defeated || state.gameOver) {
+  if (!nigel.active || nigel.defeated || state.gameOver) {
     onDone();
     return;
   }
 
-  const targets = livingTargetsFor('karryhane');
+  const targets = livingTargetsFor('nigel');
   if (targets.length === 0) {
     onDone();
     return;
@@ -1254,19 +1259,19 @@ function resolveKarryhaneTurn(onDone) {
   let nearestInRange = null;
   let nearestInRangeDist = Infinity;
   for (const t of targets) {
-    const d = lineOfSightDistance(state.grid, state.cols, state.rows, karryhane.pos, t.pos);
-    if (d <= KARRYHANE_LIGHTNING_RANGE && d < nearestInRangeDist) {
+    const d = lineOfSightDistance(state.grid, state.cols, state.rows, nigel.pos, t.pos);
+    if (d <= NIGEL_LIGHTNING_RANGE && d < nearestInRangeDist) {
       nearestInRangeDist = d;
       nearestInRange = t;
     }
   }
 
-  const lowHealth = karryhane.health <= karryhane.maxHealth * KARRYHANE_FLEE_RATIO;
+  const lowHealth = nigel.health <= nigel.maxHealth * NIGEL_FLEE_RATIO;
 
   if (lowHealth && nearestInRange) {
-    const neighbours = getOpenNeighbours(state.grid, karryhane.pos.x, karryhane.pos.y, state.cols, state.rows);
+    const neighbours = getOpenNeighbours(state.grid, nigel.pos.x, nigel.pos.y, state.cols, state.rows);
     const minDistFrom = (pos) => Math.min(...targets.map((t) => gridDistance(pos, t.pos)));
-    const currentDist = minDistFrom(karryhane.pos);
+    const currentDist = minDistFrom(nigel.pos);
 
     let fleeTo = null;
     let fleeDist = currentDist;
@@ -1279,18 +1284,18 @@ function resolveKarryhaneTurn(onDone) {
     }
 
     if (fleeTo) {
-      const wasSighted = karryhane.sighted;
-      karryhane.pos = fleeTo;
-      updateKarryhaneSighting();
-      if (wasSighted) logEvent('Karryhane flees!'); // don't double up with the detection message on first sighting
+      const wasSighted = nigel.sighted;
+      nigel.pos = fleeTo;
+      updateNigelSighting();
+      if (wasSighted) logEvent(`${nigelName(nigel)} flees!`); // don't double up with the detection message on first sighting
       render();
       onDone();
       return;
     }
 
     // Cornered — no escape improves his distance, so he fights instead.
-    if (karryhane.mana >= KARRYHANE_SPELL_COST) {
-      castKarryhaneLightning(nearestInRange, onDone);
+    if (nigel.mana >= NIGEL_SPELL_COST) {
+      castNigelLightning(nearestInRange, onDone);
       return;
     }
     onDone();
@@ -1298,16 +1303,16 @@ function resolveKarryhaneTurn(onDone) {
   }
 
   if (!lowHealth) {
-    if (nearestInRange && karryhane.mana >= KARRYHANE_SPELL_COST) {
-      castKarryhaneLightning(nearestInRange, onDone);
+    if (nearestInRange && nigel.mana >= NIGEL_SPELL_COST) {
+      castNigelLightning(nearestInRange, onDone);
       return;
     }
 
     let nearestSensed = null;
     let nearestSensedDist = Infinity;
     for (const t of targets) {
-      const d = gridDistance(karryhane.pos, t.pos);
-      if (d <= KARRYHANE_SENSE_RADIUS && d < nearestSensedDist) {
+      const d = gridDistance(nigel.pos, t.pos);
+      if (d <= NIGEL_SENSE_RADIUS && d < nearestSensedDist) {
         nearestSensedDist = d;
         nearestSensed = t;
       }
@@ -1315,9 +1320,9 @@ function resolveKarryhaneTurn(onDone) {
 
     if (nearestSensed) {
       const result = bfsFrom(state.grid, state.cols, state.rows, nearestSensed.pos);
-      const entry = result.get(`${karryhane.pos.x},${karryhane.pos.y}`);
-      if (entry && entry.prev) karryhane.pos = entry.prev;
-      updateKarryhaneSighting();
+      const entry = result.get(`${nigel.pos.x},${nigel.pos.y}`);
+      if (entry && entry.prev) nigel.pos = entry.prev;
+      updateNigelSighting();
       render();
       onDone();
       return;
@@ -1326,43 +1331,43 @@ function resolveKarryhaneTurn(onDone) {
 
   // Nothing in range or sensed (or low health with nothing threatening): heal
   // up if he can, otherwise wander.
-  if (karryhane.mana >= KARRYHANE_SPELL_COST && karryhane.health < karryhane.maxHealth) {
-    castKarryhaneHeal(onDone);
+  if (nigel.mana >= NIGEL_SPELL_COST && nigel.health < nigel.maxHealth) {
+    castNigelHeal(onDone);
     return;
   }
 
-  wanderKarryhane();
+  wanderNigel();
   onDone();
 }
 
-function castKarryhaneLightning(target, onDone) {
-  const karryhane = state.karryhane;
-  karryhane.mana -= KARRYHANE_SPELL_COST;
-  const from = { x: karryhane.pos.x, y: karryhane.pos.y };
+function castNigelLightning(target, onDone) {
+  const nigel = state.nigel;
+  nigel.mana -= NIGEL_SPELL_COST;
+  const from = { x: nigel.pos.x, y: nigel.pos.y };
   const to = { x: target.pos.x, y: target.pos.y };
 
   startLightningAnimation(from, to, () => {
-    logEvent(describeAttack("Karryhane's lightning", target.kind, KARRYHANE_LIGHTNING_DAMAGE, true));
-    damageTarget(target.kind, KARRYHANE_LIGHTNING_DAMAGE);
+    logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, NIGEL_LIGHTNING_DAMAGE, true));
+    damageTarget(target.kind, NIGEL_LIGHTNING_DAMAGE);
     if (!state.gameOver) onDone();
   });
 }
 
-function castKarryhaneHeal(onDone) {
-  const karryhane = state.karryhane;
-  karryhane.mana -= KARRYHANE_SPELL_COST;
-  karryhane.health = Math.min(karryhane.maxHealth, karryhane.health + KARRYHANE_HEAL_AMOUNT);
-  updateKarryhaneHealthDisplay();
-  if (karryhane.sighted) logEvent('Karryhane heals himself.');
-  startHealFxAnimation({ x: karryhane.pos.x, y: karryhane.pos.y }, onDone);
+function castNigelHeal(onDone) {
+  const nigel = state.nigel;
+  nigel.mana -= NIGEL_SPELL_COST;
+  nigel.health = Math.min(nigel.maxHealth, nigel.health + NIGEL_HEAL_AMOUNT);
+  updateNigelHealthDisplay();
+  if (nigel.sighted) logEvent(`${nigelName(nigel)} heals himself.`);
+  startHealFxAnimation({ x: nigel.pos.x, y: nigel.pos.y }, onDone);
 }
 
-function wanderKarryhane() {
-  const karryhane = state.karryhane;
-  const neighbours = getOpenNeighbours(state.grid, karryhane.pos.x, karryhane.pos.y, state.cols, state.rows);
+function wanderNigel() {
+  const nigel = state.nigel;
+  const neighbours = getOpenNeighbours(state.grid, nigel.pos.x, nigel.pos.y, state.cols, state.rows);
   if (neighbours.length === 0) return;
-  karryhane.pos = neighbours[Math.floor(Math.random() * neighbours.length)];
-  updateKarryhaneSighting();
+  nigel.pos = neighbours[Math.floor(Math.random() * neighbours.length)];
+  updateNigelSighting();
   render();
 }
 
@@ -1403,13 +1408,13 @@ function onDragonDefeated() {
   logEvent('The dragon is slain!');
 }
 
-function onKarryhaneDefeated() {
-  const karryhane = state.karryhane;
-  karryhane.defeated = true;
-  karryhane.lightningBolt = null;
-  karryhane.healFx = null;
-  updateKarryhaneHealthDisplay();
-  logEvent(karryhane.isLich ? 'The Lich Karryhane is banished!' : 'Karryhane is slain!');
+function onNigelDefeated() {
+  const nigel = state.nigel;
+  nigel.defeated = true;
+  nigel.lightningBolt = null;
+  nigel.healFx = null;
+  updateNigelHealthDisplay();
+  logEvent(nigel.isLich ? `${nigelName(nigel)} is banished!` : `${nigelName(nigel)} is slain!`);
 }
 
 function onGameOver() {
@@ -1424,7 +1429,7 @@ restartBtn.addEventListener('click', () => {
   state.health = 100;
   state.mana = MAX_MANA;
   state.turnCount = 0;
-  state.karryhaneIsLich = false;
+  state.nigelIsLich = false;
   state.gameOver = false;
   startLevel(1);
   render();
@@ -1474,8 +1479,8 @@ function startLevel(level) {
   state.fogRadius = getFogRadius(level);
   state.traps = placeTraps(state.grid, state.cols, state.rows, state.exit);
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
-  if (state.karryhane && state.karryhane.defeated) state.karryhaneIsLich = true;
-  state.karryhane = spawnKarryhane(state.karryhaneIsLich);
+  if (state.nigel && state.nigel.defeated) state.nigelIsLich = true;
+  state.nigel = spawnNigel(state.nigelIsLich);
   state.turnCount = 0;
   updateDragonSighting();
 }
