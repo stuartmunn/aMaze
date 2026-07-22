@@ -22,6 +22,7 @@ const dragonHealthFill = document.getElementById('dragon-health-fill');
 const karryhaneEntry = document.getElementById('karryhane-entry');
 const karryhaneNameEl = document.getElementById('karryhane-name');
 const karryhaneHealthFill = document.getElementById('karryhane-health-fill');
+const turnEventsEl = document.getElementById('turn-events');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
 const VIEWPORT_MARGIN = 40; // px — safety margin so the canvas never triggers scroll
@@ -47,6 +48,7 @@ const state = {
   animating: false, // true while a corridor-run slide is in progress — blocks new input
   health: 100, // persists across levels; only resets on restart after game over
   mana: 10, // persists across levels; only resets on restart after game over
+  turnEvents: [], // this-turn-only messages; cleared at the start of each player action
   turnCount: 0, // increments once per player action — drives mana regen and gates Karryhane's spawn
   traps: new Map(), // "x,y" -> { triggered: bool } — hidden dead-end traps for the current level
   gameOver: false,
@@ -827,13 +829,19 @@ function render() {
 function updateDragonSighting() {
   const dragon = state.dragon;
   if (!dragon || dragon.defeated || dragon.sighted) return;
-  if (isVisible(dragon.pos.x, dragon.pos.y)) dragon.sighted = true;
+  if (isVisible(dragon.pos.x, dragon.pos.y)) {
+    dragon.sighted = true;
+    logEvent('Dragon detected!');
+  }
 }
 
 function updateKarryhaneSighting() {
   const karryhane = state.karryhane;
   if (!karryhane || !karryhane.active || karryhane.defeated || karryhane.sighted) return;
-  if (isVisible(karryhane.pos.x, karryhane.pos.y)) karryhane.sighted = true;
+  if (isVisible(karryhane.pos.x, karryhane.pos.y)) {
+    karryhane.sighted = true;
+    logEvent(karryhane.isLich ? 'The Lich Karryhane detected!' : 'Karryhane detected!');
+  }
 }
 
 function updateHealthDisplay() {
@@ -846,6 +854,32 @@ function updateManaDisplay() {
   const mana = Math.max(0, state.mana);
   manaFill.style.width = `${(mana / MAX_MANA) * 100}%`;
   manaText.textContent = String(mana);
+}
+
+// Records one message for the current turn's summary. `turnEvents` is
+// cleared at the start of each player action, so this only ever shows what
+// just happened this turn, not a scrolling history.
+function logEvent(message) {
+  state.turnEvents.push(message);
+  renderTurnEvents();
+}
+
+function renderTurnEvents() {
+  turnEventsEl.textContent = state.turnEvents.length > 0 ? state.turnEvents.join(' ') : ' ';
+}
+
+function targetLabel(kind) {
+  if (kind === 'player') return 'you';
+  if (kind === 'dragon') return 'the dragon';
+  return 'Karryhane';
+}
+
+// `hit` is always true today — no miss roll exists yet — but it's kept as a
+// param so a real hit/miss check later is a one-line change at the call site.
+function describeAttack(attackerLabel, targetKind, amount, hit) {
+  const target = targetLabel(targetKind);
+  if (!hit) return `${attackerLabel} attacks ${target} and misses!`;
+  return `${attackerLabel} hits ${target} for ${amount}.`;
 }
 
 function updateDragonHealthDisplay() {
@@ -1027,6 +1061,8 @@ function handleKeyDown(event) {
   const path = computeMovePath(move.dx, move.dy, move.wall);
   if (path.length <= 1) return; // blocked immediately — nothing to animate
 
+  state.turnEvents = [];
+  renderTurnEvents();
   state.animating = true;
   animatePath(path, 0, () => {
     // catch guarantees animating clears even if something above throws, so
@@ -1058,6 +1094,8 @@ function handleKeyDown(event) {
 // player move and 1 mana, same as an arrow-key move, and shares the same
 // mob-turn resolution.
 function castFireball(target) {
+  state.turnEvents = [];
+  renderTurnEvents();
   state.mana -= 1;
   updateManaDisplay();
   state.animating = true;
@@ -1075,6 +1113,9 @@ function castFireball(target) {
 // Passes the player's turn with no action — lets the mobs act (approach,
 // attack) without the player moving or attacking.
 function skipTurn() {
+  state.turnEvents = [];
+  renderTurnEvents();
+  logEvent('You rest a moment.');
   state.animating = true;
   resolveMobTurns(() => {
     state.animating = false;
@@ -1084,11 +1125,14 @@ function skipTurn() {
 // Heals the player for up to 20% of max health, capped at 100; costs 5 mana
 // and consumes one player turn, same as fireball/skip/move.
 function castHeal() {
+  state.turnEvents = [];
+  renderTurnEvents();
   state.animating = true;
   state.mana -= HEAL_MANA_COST;
   state.health = Math.min(100, state.health + HEAL_AMOUNT);
   updateManaDisplay();
   updateHealthDisplay();
+  logEvent(`You healed for ${HEAL_AMOUNT}.`);
   resolveMobTurns(() => {
     state.animating = false;
   });
@@ -1096,6 +1140,7 @@ function castHeal() {
 
 function applyFireballDamage(kind) {
   const damage = 20 + Math.floor(Math.random() * 81); // 20-100 inclusive
+  logEvent(describeAttack('Your fireball', kind, damage, true));
   damageTarget(kind, damage);
 }
 
@@ -1234,8 +1279,10 @@ function resolveKarryhaneTurn(onDone) {
     }
 
     if (fleeTo) {
+      const wasSighted = karryhane.sighted;
       karryhane.pos = fleeTo;
       updateKarryhaneSighting();
+      if (wasSighted) logEvent('Karryhane flees!'); // don't double up with the detection message on first sighting
       render();
       onDone();
       return;
@@ -1295,6 +1342,7 @@ function castKarryhaneLightning(target, onDone) {
   const to = { x: target.pos.x, y: target.pos.y };
 
   startLightningAnimation(from, to, () => {
+    logEvent(describeAttack("Karryhane's lightning", target.kind, KARRYHANE_LIGHTNING_DAMAGE, true));
     damageTarget(target.kind, KARRYHANE_LIGHTNING_DAMAGE);
     if (!state.gameOver) onDone();
   });
@@ -1305,6 +1353,7 @@ function castKarryhaneHeal(onDone) {
   karryhane.mana -= KARRYHANE_SPELL_COST;
   karryhane.health = Math.min(karryhane.maxHealth, karryhane.health + KARRYHANE_HEAL_AMOUNT);
   updateKarryhaneHealthDisplay();
+  if (karryhane.sighted) logEvent('Karryhane heals himself.');
   startHealFxAnimation({ x: karryhane.pos.x, y: karryhane.pos.y }, onDone);
 }
 
@@ -1329,6 +1378,7 @@ function checkTrap() {
   const damage = TRAP_MIN_DAMAGE + Math.floor(Math.random() * (TRAP_MAX_DAMAGE - TRAP_MIN_DAMAGE + 1));
   state.health = Math.max(0, state.health - damage);
   updateHealthDisplay();
+  logEvent(`You triggered a trap for ${damage}!`);
 
   if (state.health <= 0) {
     state.animating = false;
@@ -1339,6 +1389,7 @@ function checkTrap() {
 // Same damage pattern as checkTrap, for the dragon's fire breath.
 function applyDragonFireDamage(kind) {
   const damage = Math.floor(Math.random() * 51); // 0-50 inclusive
+  logEvent(describeAttack("The dragon's fire breath", kind, damage, damage > 0));
   damageTarget(kind, damage);
 }
 
@@ -1349,6 +1400,7 @@ function onDragonDefeated() {
   dragon.defeated = true;
   dragon.fireBreath = null;
   updateDragonHealthDisplay();
+  logEvent('The dragon is slain!');
 }
 
 function onKarryhaneDefeated() {
@@ -1357,6 +1409,7 @@ function onKarryhaneDefeated() {
   karryhane.lightningBolt = null;
   karryhane.healFx = null;
   updateKarryhaneHealthDisplay();
+  logEvent(karryhane.isLich ? 'The Lich Karryhane is banished!' : 'Karryhane is slain!');
 }
 
 function onGameOver() {
