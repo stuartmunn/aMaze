@@ -840,7 +840,7 @@ function updateNigelSighting() {
   if (!nigel || !nigel.active || nigel.defeated || nigel.sighted) return;
   if (isVisible(nigel.pos.x, nigel.pos.y)) {
     nigel.sighted = true;
-    logEvent(nigel.isLich ? 'Nigel the Necrolich detected!' : 'Nigel the Necromancer detected!');
+    logEvent(`${nigelName(nigel)} detected!`);
   }
 }
 
@@ -868,10 +868,15 @@ function renderTurnEvents() {
   turnEventsEl.textContent = state.turnEvents.length > 0 ? state.turnEvents.join(' ') : ' ';
 }
 
+// Nigel's display name, which permanently changes once he's first killed.
+function nigelName(nigel) {
+  return nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer';
+}
+
 function targetLabel(kind) {
   if (kind === 'player') return 'you';
   if (kind === 'dragon') return 'the dragon';
-  return state.nigel && state.nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer';
+  return state.nigel ? nigelName(state.nigel) : 'Nigel the Necromancer';
 }
 
 // `hit` is always true today — no miss roll exists yet — but it's kept as a
@@ -901,7 +906,7 @@ function updateNigelHealthDisplay() {
     return;
   }
   nigelEntry.classList.remove('hidden');
-  nigelNameEl.textContent = nigel.sighted ? (nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer') : '???';
+  nigelNameEl.textContent = nigel.sighted ? nigelName(nigel) : '???';
   const pct = Math.max(0, Math.round((nigel.health / nigel.maxHealth) * 100));
   nigelHealthFill.style.width = `${pct}%`;
 }
@@ -986,7 +991,7 @@ function livingTargetsFor(exclude) {
   const targets = [];
   if (exclude !== 'player' && !state.gameOver) targets.push({ kind: 'player', pos: state.player });
   if (exclude !== 'dragon' && state.dragon && !state.dragon.defeated) targets.push({ kind: 'dragon', pos: state.dragon.pos });
-  if (exclude !== 'nigel' && state.nigel.active && !state.nigel.defeated) targets.push({ kind: 'nigel', pos: state.nigel.pos });
+  if (exclude !== 'nigel' && state.nigel && state.nigel.active && !state.nigel.defeated) targets.push({ kind: 'nigel', pos: state.nigel.pos });
   return targets;
 }
 
@@ -1155,7 +1160,7 @@ function resolveMobTurns(onDone) {
     updateManaDisplay();
   }
   const nigel = state.nigel;
-  if (nigel.active && !nigel.defeated && state.turnCount % 5 === 0 && nigel.mana < nigel.maxMana) {
+  if (nigel && nigel.active && !nigel.defeated && state.turnCount % 5 === 0 && nigel.mana < nigel.maxMana) {
     nigel.mana += 1;
   }
   resolveDragonTurn(() => resolveNigelTurn(onDone));
@@ -1282,7 +1287,7 @@ function resolveNigelTurn(onDone) {
       const wasSighted = nigel.sighted;
       nigel.pos = fleeTo;
       updateNigelSighting();
-      if (wasSighted) logEvent(`${nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer'} flees!`); // don't double up with the detection message on first sighting
+      if (wasSighted) logEvent(`${nigelName(nigel)} flees!`); // don't double up with the detection message on first sighting
       render();
       onDone();
       return;
@@ -1342,7 +1347,7 @@ function castNigelLightning(target, onDone) {
   const to = { x: target.pos.x, y: target.pos.y };
 
   startLightningAnimation(from, to, () => {
-    logEvent(describeAttack(`${nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer'}'s lightning`, target.kind, NIGEL_LIGHTNING_DAMAGE, true));
+    logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, NIGEL_LIGHTNING_DAMAGE, true));
     damageTarget(target.kind, NIGEL_LIGHTNING_DAMAGE);
     if (!state.gameOver) onDone();
   });
@@ -1353,7 +1358,7 @@ function castNigelHeal(onDone) {
   nigel.mana -= NIGEL_SPELL_COST;
   nigel.health = Math.min(nigel.maxHealth, nigel.health + NIGEL_HEAL_AMOUNT);
   updateNigelHealthDisplay();
-  if (nigel.sighted) logEvent(`${nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer'} heals himself.`);
+  if (nigel.sighted) logEvent(`${nigelName(nigel)} heals himself.`);
   startHealFxAnimation({ x: nigel.pos.x, y: nigel.pos.y }, onDone);
 }
 
@@ -1409,7 +1414,7 @@ function onNigelDefeated() {
   nigel.lightningBolt = null;
   nigel.healFx = null;
   updateNigelHealthDisplay();
-  logEvent(nigel.isLich ? 'Nigel the Necrolich is banished!' : 'Nigel the Necromancer is slain!');
+  logEvent(nigel.isLich ? `${nigelName(nigel)} is banished!` : `${nigelName(nigel)} is slain!`);
 }
 
 function onGameOver() {
