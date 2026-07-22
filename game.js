@@ -1279,9 +1279,10 @@ function resolveKarryhaneTurn(onDone) {
     }
 
     if (fleeTo) {
+      const wasSighted = karryhane.sighted;
       karryhane.pos = fleeTo;
       updateKarryhaneSighting();
-      if (karryhane.sighted) logEvent('Karryhane flees!');
+      if (wasSighted) logEvent('Karryhane flees!'); // don't double up with the detection message on first sighting
       render();
       onDone();
       return;
@@ -1388,7 +1389,7 @@ function checkTrap() {
 // Same damage pattern as checkTrap, for the dragon's fire breath.
 function applyDragonFireDamage(kind) {
   const damage = Math.floor(Math.random() * 51); // 0-50 inclusive
-  logEvent(describeAttack("The dragon's fire breath", kind, damage, true));
+  logEvent(describeAttack("The dragon's fire breath", kind, damage, damage > 0));
   damageTarget(kind, damage);
 }
 
