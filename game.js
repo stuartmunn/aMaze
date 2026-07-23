@@ -319,7 +319,7 @@ function trySpawnMob(anchorPos) {
   const dist = bfsFrom(state.grid, state.cols, state.rows, anchorPos);
   const candidates = [];
   for (const [key, entry] of dist) {
-    if (entry.dist !== MOB_SPAWN_MIN_DIST && entry.dist !== MOB_SPAWN_MAX_DIST) continue;
+    if (entry.dist < MOB_SPAWN_MIN_DIST || entry.dist > MOB_SPAWN_MAX_DIST) continue;
     const [x, y] = key.split(',').map(Number);
     if (x === state.exit.x && y === state.exit.y) continue;
     if (state.dragon && !state.dragon.defeated && state.dragon.pos.x === x && state.dragon.pos.y === y) continue;
@@ -1205,6 +1205,7 @@ function damageTarget(kind, amount, id) {
       mob.defeated = true;
       state.mobs = state.mobs.filter((m) => m.id !== id);
       logEvent(`The ${mob.name} is slain!`);
+      updateMobHud(); // don't wait for the next full render — the entry should vanish now
     }
   }
 }
@@ -1374,8 +1375,8 @@ function resolveMobTurns(onDone) {
     nigel.mana += 1;
   }
 
-  // Independent 1% rolls per player action for a minor mob to spawn 2-3
-  // path-steps ahead of the player, and separately ahead of Nigel.
+  // Independent MOB_SPAWN_CHANCE rolls per player action for a minor mob to
+  // spawn 2-3 path-steps ahead of the player, and separately ahead of Nigel.
   if (Math.random() < MOB_SPAWN_CHANCE) trySpawnMob(state.player);
   if (nigel && nigel.active && !nigel.defeated && Math.random() < MOB_SPAWN_CHANCE) trySpawnMob(nigel.pos);
 
@@ -1390,8 +1391,9 @@ function resolveMobTurns(onDone) {
 // attack roll, auto-hit. A mob adjacent to both prefers the player.
 function resolveMobAttacks() {
   for (const mob of state.mobs) {
+    if (state.gameOver) break; // a mob earlier in the array may have just finished the player off
     if (mob.defeated) continue;
-    if (!state.gameOver && lineOfSightDistance(state.grid, state.cols, state.rows, mob.pos, state.player) === 1) {
+    if (lineOfSightDistance(state.grid, state.cols, state.rows, mob.pos, state.player) === 1) {
       const damage = rollD6();
       logEvent(`The ${mob.name} ${mob.verb} you for ${damage}!`);
       damageTarget('player', damage);
@@ -1561,7 +1563,7 @@ function resolveNigelTurn(onDone) {
     if (nearestSensed) {
       const result = bfsFrom(state.grid, state.cols, state.rows, nearestSensed.pos);
       const entry = result.get(`${nigel.pos.x},${nigel.pos.y}`);
-      if (entry && entry.prev) nigel.pos = entry.prev;
+      if (entry && entry.prev && !isMobBlocked(entry.prev.x, entry.prev.y)) nigel.pos = entry.prev;
       updateNigelSighting();
       render();
       onDone();
