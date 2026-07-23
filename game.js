@@ -26,6 +26,7 @@ const turnEventsEl = document.getElementById('turn-events');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
 const VIEWPORT_MARGIN = 40; // px — safety margin so the canvas never triggers scroll
+const MIN_CELL_SIZE = 40; // px — floor; once the whole maze can't fit at this size, camera mode kicks in
 
 // Largest square the canvas can be without pushing the page taller than the
 // viewport (accounting for the heading/HUD above it) or wider than the window.
@@ -56,6 +57,7 @@ const state = {
   nigel: null, // re-rolled every level — see spawnNigel
   nigelIsLich: false, // set permanently for the rest of the run once he's first killed
   playerFireball: null, // in-flight fireball animation state, whoever the target is
+  cameraMode: false, // true once the maze no longer fits on screen at MIN_CELL_SIZE — enables scrolling viewport
 };
 
 // ---------------------------------------------------------------------------
@@ -800,9 +802,19 @@ function startHealFxAnimation(at, onComplete) {
  * this isn't an animation loop, so there's no per-frame redraw.
  */
 function render() {
-  state.cellSize = Math.floor(getAvailableCanvasSize() / Math.max(state.cols, state.rows));
-  canvas.width = state.cellSize * state.cols;
-  canvas.height = state.cellSize * state.rows;
+  const available = getAvailableCanvasSize();
+  const fitCellSize = available / Math.max(state.cols, state.rows);
+  state.cameraMode = fitCellSize < MIN_CELL_SIZE;
+
+  if (state.cameraMode) {
+    state.cellSize = MIN_CELL_SIZE;
+    canvas.width = Math.floor(available);
+    canvas.height = Math.floor(available);
+  } else {
+    state.cellSize = Math.floor(fitCellSize);
+    canvas.width = state.cellSize * state.cols;
+    canvas.height = state.cellSize * state.rows;
+  }
   levelDisplay.textContent = `Level ${state.level}`;
 
   updateHealthDisplay();
@@ -811,6 +823,11 @@ function render() {
   updateNigelHealthDisplay();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  if (state.cameraMode) {
+    const off = computeCameraOffset();
+    ctx.translate(-off.x, -off.y);
+  }
   drawWalls();
   drawExit();
   if (state.dragon && !state.dragon.defeated) drawDragon();
@@ -820,6 +837,28 @@ function render() {
   if (state.playerFireball) drawFireballFrame(state.playerFireball);
   if (state.nigel && state.nigel.lightningBolt) drawLightningFrame(state.nigel.lightningBolt);
   if (state.nigel && state.nigel.healFx) drawHealFxFrame(state.nigel.healFx);
+  ctx.restore();
+}
+
+// Scrolling-viewport offset once the maze has outgrown the canvas at
+// MIN_CELL_SIZE: centres on the player's animated position, clamped so the
+// view never scrolls past the maze edges.
+function computeCameraOffset() {
+  const worldW = state.cols * state.cellSize;
+  const worldH = state.rows * state.cellSize;
+  const viewW = canvas.width;
+  const viewH = canvas.height;
+
+  const playerPxX = state.displayPlayer.x * state.cellSize + state.cellSize / 2;
+  const playerPxY = state.displayPlayer.y * state.cellSize + state.cellSize / 2;
+
+  let offsetX = playerPxX - viewW / 2;
+  let offsetY = playerPxY - viewH / 2;
+
+  offsetX = Math.max(0, Math.min(offsetX, Math.max(0, worldW - viewW)));
+  offsetY = Math.max(0, Math.min(offsetY, Math.max(0, worldH - viewH)));
+
+  return { x: offsetX, y: offsetY };
 }
 
 // Marks the dragon as sighted once it's actually visible on screen (past the
