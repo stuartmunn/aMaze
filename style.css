@@ -131,6 +131,25 @@ h1 {
   transition: width 0.2s ease-out;
 }
 
+#minor-mob-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.minor-mob-health-bar {
+  border-color: #8a6a2f;
+  width: 120px;
+  height: 0.8rem;
+}
+
+.minor-mob-health-fill {
+  height: 100%;
+  width: 100%;
+  background: #c9982f;
+  transition: width 0.2s ease-out;
+}
+
 #turn-events {
   margin: 0;
   font-size: 0.75rem;
