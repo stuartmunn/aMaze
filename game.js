@@ -22,6 +22,7 @@ const dragonHealthFill = document.getElementById('dragon-health-fill');
 const nigelEntry = document.getElementById('nigel-entry');
 const nigelNameEl = document.getElementById('nigel-name');
 const nigelHealthFill = document.getElementById('nigel-health-fill');
+const minorMobList = document.getElementById('minor-mob-list');
 const turnEventsEl = document.getElementById('turn-events');
 
 const MAX_CANVAS_SIZE = 640; // px — upper bound; actual size also shrinks to fit the viewport
@@ -58,6 +59,7 @@ const state = {
   nigelIsLich: false, // set permanently for the rest of the run once he's first killed
   playerFireball: null, // in-flight fireball animation state, whoever the target is
   cameraMode: false, // true once the maze no longer fits on screen at MIN_CELL_SIZE — enables scrolling viewport
+  mobs: [], // minor mobs currently alive this level — re-rolled every level, see trySpawnMob
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +194,23 @@ const NIGEL_HEAL_AMOUNT = 25;
 const NIGEL_FLEE_RATIO = 0.5; // flees (or fights if cornered) at or below this fraction of max health
 const NIGEL_SENSE_RADIUS = 6; // straight-line "notices a target" range, mirrors the dragon's triggerDistance
 
+// Minor mobs: small stationary annoyances that spawn on the path a couple of
+// cells ahead of the player or Nigel, block that tile until fought past, and
+// bite for 1d6 if you end up next to one. Meant to be cleared in a hit or
+// two of fireball, not a real fight.
+const MOB_TYPES = [
+  { type: 'spider', name: 'Maze Spider', glyph: '🕷️', verb: 'bites' },
+  { type: 'viper', name: 'Crypt Viper', glyph: '🐍', verb: 'strikes' },
+  { type: 'rat', name: 'Giant Rat', glyph: '🐀', verb: 'gnaws' },
+  { type: 'slime', name: 'Slime Mould', glyph: '🟢', verb: 'engulfs' },
+  { type: 'zombie', name: 'Zombie', glyph: '🧟', verb: 'claws' },
+];
+const MOB_SPAWN_CHANCE = 0.05; // per player action, rolled separately for the player and for Nigel
+const MOB_SPAWN_MIN_DIST = 2; // BFS steps (real path distance) from the anchor
+const MOB_SPAWN_MAX_DIST = 3;
+const MOB_MAX_ALIVE = 6; // soft cap so spawns don't accumulate indefinitely
+let nextMobId = 1;
+
 // Breadth-first search from `start` across the maze graph (an edge exists
 // between two cells only where no wall blocks passage). Returns a map of
 // "x,y" -> { dist, prev } for every reachable cell. In a perfect maze every
@@ -281,7 +300,50 @@ function getOpenNeighbours(grid, x, y, cols, rows) {
   ];
   return steps
     .filter(([nx, ny, wall]) => nx >= 0 && nx < cols && ny >= 0 && ny < rows && !(cell.walls & wall))
-    .map(([nx, ny]) => ({ x: nx, y: ny }));
+    .map(([nx, ny]) => ({ x: nx, y: ny }))
+    .filter(({ x, y }) => !isMobBlocked(x, y));
+}
+
+// True if a living mob occupies (x, y) — mobs block the tile they stand on,
+// same as a wall, until fireballed or otherwise removed.
+function isMobBlocked(x, y) {
+  return state.mobs.some((m) => !m.defeated && m.pos.x === x && m.pos.y === y);
+}
+
+// Rolls a 1% chance to spawn a random minor mob 2-3 real path-steps ahead of
+// `anchorPos` (the player or Nigel), on an open cell not already occupied.
+// No-ops once MOB_MAX_ALIVE is reached or no valid cell exists at that range.
+function trySpawnMob(anchorPos) {
+  if (state.mobs.length >= MOB_MAX_ALIVE) return;
+
+  const dist = bfsFrom(state.grid, state.cols, state.rows, anchorPos);
+  const candidates = [];
+  for (const [key, entry] of dist) {
+    if (entry.dist < MOB_SPAWN_MIN_DIST || entry.dist > MOB_SPAWN_MAX_DIST) continue;
+    const [x, y] = key.split(',').map(Number);
+    if (x === state.exit.x && y === state.exit.y) continue;
+    if (state.dragon && !state.dragon.defeated && state.dragon.pos.x === x && state.dragon.pos.y === y) continue;
+    if (state.nigel && state.nigel.active && !state.nigel.defeated && state.nigel.pos.x === x && state.nigel.pos.y === y) continue;
+    if (isMobBlocked(x, y)) continue;
+    candidates.push({ x, y });
+  }
+  if (candidates.length === 0) return;
+
+  const spawn = candidates[Math.floor(Math.random() * candidates.length)];
+  const template = MOB_TYPES[Math.floor(Math.random() * MOB_TYPES.length)];
+  const maxHealth = roll3d6();
+
+  state.mobs.push({
+    id: nextMobId++,
+    type: template.type,
+    name: template.name,
+    glyph: template.glyph,
+    verb: template.verb,
+    pos: spawn,
+    health: maxHealth,
+    maxHealth,
+    defeated: false,
+  });
 }
 
 // Picks one dead-end for the dragon (avoiding cells already trapped where
@@ -596,6 +658,23 @@ function drawDragon() {
   ctx.fillText('🐉', cx, cy);
 }
 
+function drawMob(mob) {
+  const { cellSize } = state;
+  if (!isVisible(mob.pos.x, mob.pos.y)) return;
+
+  const cx = mob.pos.x * cellSize + cellSize / 2;
+  const cy = mob.pos.y * cellSize + cellSize / 2;
+
+  ctx.font = `${cellSize * 0.6}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(mob.glyph, cx, cy);
+}
+
+function drawMobs() {
+  for (const mob of state.mobs) drawMob(mob);
+}
+
 // Nigel's dark counterpart to drawPlayer: same silhouette, black-and-red
 // palette, no star trim — reads as a corrupted mirror of the player's sprite
 // rather than another emoji stamp.
@@ -833,6 +912,7 @@ function render() {
   updateManaDisplay();
   updateDragonHealthDisplay();
   updateNigelHealthDisplay();
+  updateMobHud();
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.save();
@@ -844,6 +924,7 @@ function render() {
   drawExit();
   if (state.dragon && !state.dragon.defeated) drawDragon();
   if (state.nigel && state.nigel.active && !state.nigel.defeated) drawNigel();
+  drawMobs();
   drawPlayer();
   if (state.dragon && state.dragon.fireBreath) drawFireBreathFrame(state.dragon.fireBreath);
   if (state.playerFireball) drawFireballFrame(state.playerFireball);
@@ -924,14 +1005,15 @@ function nigelName(nigel) {
   return nigel.isLich ? 'Nigel the Necrolich' : 'Nigel the Necromancer';
 }
 
-function targetLabel(kind) {
+function targetLabel(kind, mobName) {
   if (kind === 'player') return 'you';
   if (kind === 'dragon') return 'the dragon';
+  if (kind === 'mob') return mobName;
   return state.nigel ? nigelName(state.nigel) : 'Nigel the Necromancer';
 }
 
-function describeAttack(attackerLabel, targetKind, amount, hit, crit) {
-  const target = targetLabel(targetKind);
+function describeAttack(attackerLabel, targetKind, amount, hit, crit, mobName) {
+  const target = targetLabel(targetKind, mobName);
   if (!hit) return `${attackerLabel} attacks ${target} and misses!`;
   const suffix = crit ? ' Critical hit!' : '';
   return `${attackerLabel} hits ${target} for ${amount}.${suffix}`;
@@ -959,6 +1041,42 @@ function updateNigelHealthDisplay() {
   nigelNameEl.textContent = nigel.sighted ? nigelName(nigel) : '???';
   const pct = Math.max(0, Math.round((nigel.health / nigel.maxHealth) * 100));
   nigelHealthFill.style.width = `${pct}%`;
+}
+
+// Rebuilds the minor-mob HUD list from scratch each render — only alive
+// mobs currently within the fog-of-war radius get an entry, so one appears
+// the moment it's sighted and disappears the moment it fogs back out or dies.
+// Cheap to just rebuild given MOB_MAX_ALIVE caps the list at a handful.
+function updateMobHud() {
+  minorMobList.innerHTML = '';
+  for (const mob of state.mobs) {
+    if (mob.defeated || !isVisible(mob.pos.x, mob.pos.y)) continue;
+
+    const entry = document.createElement('div');
+    entry.className = 'mob-entry';
+
+    const heading = document.createElement('h2');
+    heading.textContent = `${mob.glyph} ${mob.name}`;
+    entry.appendChild(heading);
+
+    const row = document.createElement('div');
+    row.className = 'stat-row';
+    const label = document.createElement('span');
+    label.className = 'stat-label';
+    label.textContent = 'Health';
+    row.appendChild(label);
+
+    const bar = document.createElement('div');
+    bar.className = 'health-bar minor-mob-health-bar';
+    const fill = document.createElement('div');
+    fill.className = 'minor-mob-health-fill';
+    fill.style.width = `${Math.max(0, Math.round((mob.health / mob.maxHealth) * 100))}%`;
+    bar.appendChild(fill);
+    row.appendChild(bar);
+
+    entry.appendChild(row);
+    minorMobList.appendChild(entry);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -996,6 +1114,12 @@ function computeMovePath(dx, dy, wall) {
   if (cell.walls & wall) return [{ x, y }]; // wall ahead — blocked
 
   const next = { x: x + dx, y: y + dy };
+  const blocker = state.mobs.find((m) => !m.defeated && m.pos.x === next.x && m.pos.y === next.y);
+  if (blocker) {
+    state.turnEvents = []; // this move produced no other turn events, so start fresh
+    logEvent(`A ${blocker.name} blocks your way!`);
+    return [{ x, y }]; // mob occupies the tile — blocked, same as a wall
+  }
   state.player = next;
   return [{ x, y }, next];
 }
@@ -1037,18 +1161,27 @@ function animatePath(path, index, onDone) {
 // All currently-alive combatants other than the one named in `exclude`
 // ('player', 'dragon', or 'nigel'), each as { kind, pos }. Shared by the
 // dragon's and Nigel's turn resolution so either can target the other.
-function livingTargetsFor(exclude) {
+// `includeMobs` folds in minor mobs as { kind: 'mob', id, pos } entries —
+// used by the player's fireball targeting and Nigel's lightning targeting,
+// but not the dragon's (mobs are beneath its notice).
+function livingTargetsFor(exclude, includeMobs = false) {
   const targets = [];
   if (exclude !== 'player' && !state.gameOver) targets.push({ kind: 'player', pos: state.player });
   if (exclude !== 'dragon' && state.dragon && !state.dragon.defeated) targets.push({ kind: 'dragon', pos: state.dragon.pos });
   if (exclude !== 'nigel' && state.nigel && state.nigel.active && !state.nigel.defeated) targets.push({ kind: 'nigel', pos: state.nigel.pos });
+  if (includeMobs) {
+    for (const m of state.mobs) {
+      if (!m.defeated) targets.push({ kind: 'mob', id: m.id, pos: m.pos });
+    }
+  }
   return targets;
 }
 
 // Applies damage to whichever combatant `kind` names, updating its HUD and
 // triggering its defeat/game-over handling. Shared by the player's fireball,
-// the dragon's fire breath, and Nigel's lightning.
-function damageTarget(kind, amount) {
+// the dragon's fire breath, and Nigel's lightning. `id` is only used for
+// kind === 'mob', to pick which mob out of state.mobs.
+function damageTarget(kind, amount, id) {
   if (kind === 'player') {
     state.health = Math.max(0, state.health - amount);
     updateHealthDisplay();
@@ -1064,15 +1197,25 @@ function damageTarget(kind, amount) {
     state.nigel.health = Math.max(0, state.nigel.health - amount);
     updateNigelHealthDisplay();
     if (state.nigel.health <= 0) onNigelDefeated();
+  } else if (kind === 'mob') {
+    const mob = state.mobs.find((m) => m.id === id);
+    if (!mob) return;
+    mob.health = Math.max(0, mob.health - amount);
+    if (mob.health <= 0) {
+      mob.defeated = true;
+      state.mobs = state.mobs.filter((m) => m.id !== id);
+      logEvent(`The ${mob.name} is slain!`);
+      updateMobHud(); // don't wait for the next full render — the entry should vanish now
+    }
   }
 }
 
-// Nearest of the dragon/Nigel (whichever are alive) within fireball
-// range and line of sight, or null if neither qualifies.
+// Nearest of the dragon/Nigel/mobs (whichever are alive) within fireball
+// range and line of sight, or null if none qualify.
 function getFireballTarget() {
   let best = null;
   let bestDist = Infinity;
-  for (const t of livingTargetsFor('player')) {
+  for (const t of livingTargetsFor('player', true)) {
     const d = lineOfSightDistance(state.grid, state.cols, state.rows, state.player, t.pos);
     if (d <= FIREBALL_RANGE && d < bestDist) {
       bestDist = d;
@@ -1168,7 +1311,7 @@ function castFireball(target) {
   const to = { x: target.pos.x, y: target.pos.y };
 
   startFireballAnimation(from, to, () => {
-    applyFireballDamage(target.kind);
+    applyFireballDamage(target.kind, target.id);
     resolveMobTurns(() => {
       state.animating = false;
     });
@@ -1203,17 +1346,18 @@ function castHeal() {
   });
 }
 
-function applyFireballDamage(kind) {
+function applyFireballDamage(kind, id) {
+  const mobName = kind === 'mob' ? state.mobs.find((m) => m.id === id)?.name : undefined;
   // Aim roll: 3d6 over 6 to hit.
   if (roll3d6() <= 6) {
-    logEvent(describeAttack('Your fireball', kind, 0, false));
+    logEvent(describeAttack('Your fireball', kind, 0, false, false, mobName));
     return;
   }
   const damageRoll = roll3d6();
   const crit = damageRoll >= 17;
   const damage = damageRoll * 5 * (crit ? 2 : 1); // 15-80 normal, 170-180 crit
-  logEvent(describeAttack('Your fireball', kind, damage, true, crit));
-  damageTarget(kind, damage);
+  logEvent(describeAttack('Your fireball', kind, damage, true, crit, mobName));
+  damageTarget(kind, damage, id);
 }
 
 // Advances the turn counter (which also drives the player's and Nigel's
@@ -1230,7 +1374,38 @@ function resolveMobTurns(onDone) {
   if (nigel && nigel.active && !nigel.defeated && state.turnCount % 5 === 0 && nigel.mana < nigel.maxMana) {
     nigel.mana += 1;
   }
-  resolveDragonTurn(() => resolveNigelTurn(onDone));
+
+  // Independent MOB_SPAWN_CHANCE rolls per player action for a minor mob to
+  // spawn 2-3 path-steps ahead of the player, and separately ahead of Nigel.
+  if (Math.random() < MOB_SPAWN_CHANCE) trySpawnMob(state.player);
+  if (nigel && nigel.active && !nigel.defeated && Math.random() < MOB_SPAWN_CHANCE) trySpawnMob(nigel.pos);
+
+  resolveDragonTurn(() => resolveNigelTurn(() => {
+    resolveMobAttacks();
+    onDone();
+  }));
+}
+
+// Any mob standing next to the player or Nigel gets a free melee hit this
+// turn (mobs are stationary, so this is the only way they act) — 1d6, no
+// attack roll, auto-hit. A mob adjacent to both prefers the player.
+function resolveMobAttacks() {
+  for (const mob of state.mobs) {
+    if (state.gameOver) break; // a mob earlier in the array may have just finished the player off
+    if (mob.defeated) continue;
+    if (lineOfSightDistance(state.grid, state.cols, state.rows, mob.pos, state.player) === 1) {
+      const damage = rollD6();
+      logEvent(`The ${mob.name} ${mob.verb} you for ${damage}!`);
+      damageTarget('player', damage);
+      continue;
+    }
+    const nigel = state.nigel;
+    if (nigel && nigel.active && !nigel.defeated && lineOfSightDistance(state.grid, state.cols, state.rows, mob.pos, nigel.pos) === 1) {
+      const damage = rollD6();
+      logEvent(`The ${mob.name} ${mob.verb} ${nigelName(nigel)} for ${damage}!`);
+      damageTarget('nigel', damage);
+    }
+  }
 }
 
 // Resolves the dragon's turn (wake check, then breathe-or-move action) after
@@ -1317,7 +1492,7 @@ function resolveNigelTurn(onDone) {
     return;
   }
 
-  const targets = livingTargetsFor('nigel');
+  const targets = livingTargetsFor('nigel', true);
   if (targets.length === 0) {
     onDone();
     return;
@@ -1388,7 +1563,7 @@ function resolveNigelTurn(onDone) {
     if (nearestSensed) {
       const result = bfsFrom(state.grid, state.cols, state.rows, nearestSensed.pos);
       const entry = result.get(`${nigel.pos.x},${nigel.pos.y}`);
-      if (entry && entry.prev) nigel.pos = entry.prev;
+      if (entry && entry.prev && !isMobBlocked(entry.prev.x, entry.prev.y)) nigel.pos = entry.prev;
       updateNigelSighting();
       render();
       onDone();
@@ -1421,18 +1596,20 @@ function castNigelLightning(target, onDone) {
   const from = { x: nigel.pos.x, y: nigel.pos.y };
   const to = { x: target.pos.x, y: target.pos.y };
 
+  const mobName = target.kind === 'mob' ? state.mobs.find((m) => m.id === target.id)?.name : undefined;
+
   startLightningAnimation(from, to, () => {
     // Aim roll: 3d6 over 6 to hit.
     if (roll3d6() <= 6) {
-      logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, 0, false));
+      logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, 0, false, false, mobName));
       if (!state.gameOver) onDone();
       return;
     }
     const damageRoll = roll3d6();
     const crit = damageRoll >= 17;
     const damage = damageRoll * 2 * (crit ? 2 : 1); // 6-32 normal, 68-72 crit
-    logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, damage, true, crit));
-    damageTarget(target.kind, damage);
+    logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, damage, true, crit, mobName));
+    damageTarget(target.kind, damage, target.id);
     if (!state.gameOver) onDone();
   });
 }
@@ -1572,6 +1749,7 @@ function startLevel(level) {
   state.dragon = spawnDragon(state.grid, state.cols, state.rows, state.exit, state.traps, level);
   if (state.nigel && state.nigel.defeated) state.nigelIsLich = true;
   state.nigel = spawnNigel(state.nigelIsLich);
+  state.mobs = [];
   state.turnCount = 0;
   updateDragonSighting();
 }
