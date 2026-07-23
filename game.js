@@ -123,6 +123,16 @@ function generateMaze(cols, rows) {
   return grid;
 }
 
+// D&D-style 3d6 roll, used for spell-cast checks, aim/hit checks, and damage
+// rolls. A roll of 17 or 18 is a critical hit (damage doubled at the call site).
+function rollD6() {
+  return 1 + Math.floor(Math.random() * 6);
+}
+
+function roll3d6() {
+  return rollD6() + rollD6() + rollD6();
+}
+
 const TRAP_MIN_RATIO = 0.1;
 const TRAP_MAX_RATIO = 0.3;
 const TRAP_MIN_DAMAGE = 5;
@@ -178,7 +188,6 @@ const NIGEL_MAX_HEALTH = 100; // mirrors the player's health
 const NIGEL_MAX_MANA = 10;
 const NIGEL_SPELL_COST = 1; // mana per lightning bolt or heal
 const NIGEL_LIGHTNING_RANGE = 3; // line-of-sight cells, stopped by walls
-const NIGEL_LIGHTNING_DAMAGE = 20; // flat, unlike the player's/dragon's randomised damage
 const NIGEL_HEAL_AMOUNT = 25;
 const NIGEL_FLEE_RATIO = 0.5; // flees (or fights if cornered) at or below this fraction of max health
 const NIGEL_SENSE_RADIUS = 6; // straight-line "notices a target" range, mirrors the dragon's triggerDistance
@@ -286,7 +295,10 @@ function spawnDragon(grid, cols, rows, exit, traps, level) {
   const candidates = untrapped.length > 0 ? untrapped : deadEnds;
   const spawn = candidates[Math.floor(Math.random() * candidates.length)];
 
-  const maxHealth = DRAGON_MIN_HEALTH + Math.floor(Math.random() * (level * 100 - DRAGON_MIN_HEALTH + 1));
+  // Linear growth (rather than the old level*100 spread) so a dragon fight
+  // stays winnable in a reasonable number of turns now that hits can miss
+  // and damage is dice-capped.
+  const maxHealth = DRAGON_MIN_HEALTH + level * 20 + Math.floor(Math.random() * 21);
   const triggerDistance = DRAGON_TRIGGER_MIN + Math.floor(Math.random() * (DRAGON_TRIGGER_MAX - DRAGON_TRIGGER_MIN + 1));
 
   return {
@@ -918,12 +930,11 @@ function targetLabel(kind) {
   return state.nigel ? nigelName(state.nigel) : 'Nigel the Necromancer';
 }
 
-// `hit` is always true today — no miss roll exists yet — but it's kept as a
-// param so a real hit/miss check later is a one-line change at the call site.
-function describeAttack(attackerLabel, targetKind, amount, hit) {
+function describeAttack(attackerLabel, targetKind, amount, hit, crit) {
   const target = targetLabel(targetKind);
   if (!hit) return `${attackerLabel} attacks ${target} and misses!`;
-  return `${attackerLabel} hits ${target} for ${amount}.`;
+  const suffix = crit ? ' Critical hit!' : '';
+  return `${attackerLabel} hits ${target} for ${amount}.${suffix}`;
 }
 
 function updateDragonHealthDisplay() {
@@ -1143,6 +1154,16 @@ function castFireball(target) {
   state.mana -= 1;
   updateManaDisplay();
   state.animating = true;
+
+  // Cast roll: 3d6 over 6 to successfully get the spell off at all.
+  if (roll3d6() <= 6) {
+    logEvent('Your fireball fizzles!');
+    resolveMobTurns(() => {
+      state.animating = false;
+    });
+    return;
+  }
+
   const from = { x: state.player.x, y: state.player.y };
   const to = { x: target.pos.x, y: target.pos.y };
 
@@ -1183,8 +1204,15 @@ function castHeal() {
 }
 
 function applyFireballDamage(kind) {
-  const damage = 20 + Math.floor(Math.random() * 81); // 20-100 inclusive
-  logEvent(describeAttack('Your fireball', kind, damage, true));
+  // Aim roll: 3d6 over 6 to hit.
+  if (roll3d6() <= 6) {
+    logEvent(describeAttack('Your fireball', kind, 0, false));
+    return;
+  }
+  const damageRoll = roll3d6();
+  const crit = damageRoll >= 17;
+  const damage = damageRoll * 5 * (crit ? 2 : 1); // 15-80 normal, 170-180 crit
+  logEvent(describeAttack('Your fireball', kind, damage, true, crit));
   damageTarget(kind, damage);
 }
 
@@ -1382,12 +1410,29 @@ function resolveNigelTurn(onDone) {
 function castNigelLightning(target, onDone) {
   const nigel = state.nigel;
   nigel.mana -= NIGEL_SPELL_COST;
+
+  // Cast roll: 3d6 over 6 to successfully get the spell off at all.
+  if (roll3d6() <= 6) {
+    logEvent(`${nigelName(nigel)}'s lightning fizzles!`);
+    onDone();
+    return;
+  }
+
   const from = { x: nigel.pos.x, y: nigel.pos.y };
   const to = { x: target.pos.x, y: target.pos.y };
 
   startLightningAnimation(from, to, () => {
-    logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, NIGEL_LIGHTNING_DAMAGE, true));
-    damageTarget(target.kind, NIGEL_LIGHTNING_DAMAGE);
+    // Aim roll: 3d6 over 6 to hit.
+    if (roll3d6() <= 6) {
+      logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, 0, false));
+      if (!state.gameOver) onDone();
+      return;
+    }
+    const damageRoll = roll3d6();
+    const crit = damageRoll >= 17;
+    const damage = damageRoll * 2 * (crit ? 2 : 1); // 6-32 normal, 68-72 crit
+    logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, damage, true, crit));
+    damageTarget(target.kind, damage);
     if (!state.gameOver) onDone();
   });
 }
@@ -1430,10 +1475,17 @@ function checkTrap() {
   }
 }
 
-// Same damage pattern as checkTrap, for the dragon's fire breath.
+// Dragon breath isn't a spell, so there's no cast roll — just an aim roll
+// then a damage roll.
 function applyDragonFireDamage(kind) {
-  const damage = Math.floor(Math.random() * 51); // 0-50 inclusive
-  logEvent(describeAttack("The dragon's fire breath", kind, damage, damage > 0));
+  if (roll3d6() <= 6) {
+    logEvent(describeAttack("The dragon's fire breath", kind, 0, false));
+    return;
+  }
+  const damageRoll = roll3d6();
+  const crit = damageRoll >= 17;
+  const damage = damageRoll * 3 * (crit ? 2 : 1); // 9-48 normal, 102-108 crit
+  logEvent(describeAttack("The dragon's fire breath", kind, damage, true, crit));
   damageTarget(kind, damage);
 }
 
