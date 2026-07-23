@@ -1370,6 +1370,12 @@ function resolveMobTurns(onDone) {
     state.mana += 1;
     updateManaDisplay();
   }
+  // Slow passive regen so the heal spell isn't the only way to top up health.
+  // Same 5-turn cadence as mana regen above, per PR #18 review.
+  if (state.turnCount % 5 === 0 && state.health > 0 && state.health < 100) {
+    state.health += 1;
+    updateHealthDisplay();
+  }
   const nigel = state.nigel;
   if (nigel && nigel.active && !nigel.defeated && state.turnCount % 5 === 0 && nigel.mana < nigel.maxMana) {
     nigel.mana += 1;
