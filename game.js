@@ -1211,7 +1211,7 @@ function applyFireballDamage(kind) {
   }
   const damageRoll = roll3d6();
   const crit = damageRoll >= 17;
-  const damage = damageRoll * 5 * (crit ? 2 : 1); // 15-90 normal, 30-180 crit
+  const damage = damageRoll * 5 * (crit ? 2 : 1); // 15-80 normal, 170-180 crit
   logEvent(describeAttack('Your fireball', kind, damage, true, crit));
   damageTarget(kind, damage);
 }
@@ -1430,7 +1430,7 @@ function castNigelLightning(target, onDone) {
     }
     const damageRoll = roll3d6();
     const crit = damageRoll >= 17;
-    const damage = damageRoll * 2 * (crit ? 2 : 1); // 6-36 normal, 12-72 crit
+    const damage = damageRoll * 2 * (crit ? 2 : 1); // 6-32 normal, 68-72 crit
     logEvent(describeAttack(`${nigelName(nigel)}'s lightning`, target.kind, damage, true, crit));
     damageTarget(target.kind, damage);
     if (!state.gameOver) onDone();
@@ -1484,7 +1484,7 @@ function applyDragonFireDamage(kind) {
   }
   const damageRoll = roll3d6();
   const crit = damageRoll >= 17;
-  const damage = damageRoll * 3 * (crit ? 2 : 1); // 9-54 normal, 18-108 crit
+  const damage = damageRoll * 3 * (crit ? 2 : 1); // 9-48 normal, 102-108 crit
   logEvent(describeAttack("The dragon's fire breath", kind, damage, true, crit));
   damageTarget(kind, damage);
 }
