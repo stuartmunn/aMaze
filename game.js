@@ -808,8 +808,8 @@ function render() {
 
   if (state.cameraMode) {
     state.cellSize = MIN_CELL_SIZE;
-    canvas.width = available;
-    canvas.height = available;
+    canvas.width = Math.floor(available);
+    canvas.height = Math.floor(available);
   } else {
     state.cellSize = Math.floor(fitCellSize);
     canvas.width = state.cellSize * state.cols;
