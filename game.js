@@ -1438,10 +1438,10 @@ function moveMobs() {
     }
 
     if (nearest) {
-      if (lineOfSightDistance(state.grid, state.cols, state.rows, mob.pos, nearest.pos) === 1) continue; // already adjacent — attack, don't move
-
       const result = bfsFrom(state.grid, state.cols, state.rows, nearest.pos);
       const entry = result.get(`${mob.pos.x},${mob.pos.y}`);
+      if (entry && entry.dist === 1) continue; // already adjacent — attack, don't move
+
       const step = entry && entry.prev;
       if (step && !isMobBlocked(step.x, step.y) && !isCombatantBlocked(step.x, step.y)) {
         mob.pos = step;
@@ -1451,7 +1451,7 @@ function moveMobs() {
     }
 
     const neighbours = getOpenNeighbours(state.grid, mob.pos.x, mob.pos.y, state.cols, state.rows)
-      .filter(({ x, y }) => !isCombatantBlocked(x, y));
+      .filter(({ x, y }) => !isMobBlocked(x, y) && !isCombatantBlocked(x, y));
     if (neighbours.length > 0) {
       mob.pos = neighbours[Math.floor(Math.random() * neighbours.length)];
       moved = true;
