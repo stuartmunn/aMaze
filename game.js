@@ -194,10 +194,11 @@ const NIGEL_HEAL_AMOUNT = 25;
 const NIGEL_FLEE_RATIO = 0.5; // flees (or fights if cornered) at or below this fraction of max health
 const NIGEL_SENSE_RADIUS = 6; // straight-line "notices a target" range, mirrors the dragon's triggerDistance
 
-// Minor mobs: small stationary annoyances that spawn on the path a couple of
-// cells ahead of the player or Nigel, block that tile until fought past, and
-// bite for 1d6 if you end up next to one. Meant to be cleared in a hit or
-// two of fireball, not a real fight.
+// Minor mobs: small annoyances that spawn on the path a couple of cells
+// ahead of the player or Nigel, amble about the maze, and actively chase
+// whichever of the two comes within MOB_SENSE_RADIUS — biting for 1d6 once
+// adjacent. Meant to be cleared in a hit or two of fireball, not a real
+// fight.
 const MOB_TYPES = [
   { type: 'spider', name: 'Maze Spider', glyph: '🕷️', verb: 'bites' },
   { type: 'viper', name: 'Crypt Viper', glyph: '🐍', verb: 'strikes' },
@@ -209,6 +210,7 @@ const MOB_SPAWN_CHANCE = 0.05; // per player action, rolled separately for the p
 const MOB_SPAWN_MIN_DIST = 2; // BFS steps (real path distance) from the anchor
 const MOB_SPAWN_MAX_DIST = 3;
 const MOB_MAX_ALIVE = 6; // soft cap so spawns don't accumulate indefinitely
+const MOB_SENSE_RADIUS = 10; // straight-line cells within which a mob notices and chases a target; beyond this it wanders instead
 let nextMobId = 1;
 
 // Breadth-first search from `start` across the maze graph (an edge exists
@@ -1387,14 +1389,82 @@ function resolveMobTurns(onDone) {
   if (nigel && nigel.active && !nigel.defeated && Math.random() < MOB_SPAWN_CHANCE) trySpawnMob(nigel.pos);
 
   resolveDragonTurn(() => resolveNigelTurn(() => {
+    moveMobs();
     resolveMobAttacks();
     onDone();
   }));
 }
 
+// A living mob's chase targets: the player and Nigel, never the dragon
+// (mobs are beneath its notice, and it never fights them back).
+function mobTargets() {
+  const targets = [];
+  if (!state.gameOver) targets.push({ kind: 'player', pos: state.player });
+  if (state.nigel && state.nigel.active && !state.nigel.defeated) targets.push({ kind: 'nigel', pos: state.nigel.pos });
+  return targets;
+}
+
+// True if (x, y) is occupied by a living player, Nigel, or the dragon —
+// used alongside isMobBlocked so a chasing/wandering mob never steps onto
+// a cell another combatant already stands on.
+function isCombatantBlocked(x, y) {
+  if (!state.gameOver && state.player.x === x && state.player.y === y) return true;
+  if (state.nigel && state.nigel.active && !state.nigel.defeated && state.nigel.pos.x === x && state.nigel.pos.y === y) return true;
+  if (state.dragon && !state.dragon.defeated && state.dragon.pos.x === x && state.dragon.pos.y === y) return true;
+  return false;
+}
+
+// Moves each living mob one step per player action: chases the nearest
+// target within MOB_SENSE_RADIUS (BFS toward it, same approach as the
+// dragon's and Nigel's chase logic) — or, once already adjacent, holds
+// position and lets resolveMobAttacks land the bite instead. Beyond that
+// range (or with nothing to chase) it ambles to a random open neighbour,
+// same as wanderNigel.
+function moveMobs() {
+  const targets = mobTargets();
+  let moved = false;
+
+  for (const mob of state.mobs) {
+    if (mob.defeated) continue;
+
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const t of targets) {
+      const d = gridDistance(mob.pos, t.pos);
+      if (d <= MOB_SENSE_RADIUS && d < nearestDist) {
+        nearestDist = d;
+        nearest = t;
+      }
+    }
+
+    if (nearest) {
+      const result = bfsFrom(state.grid, state.cols, state.rows, nearest.pos);
+      const entry = result.get(`${mob.pos.x},${mob.pos.y}`);
+      if (entry && entry.dist === 1) continue; // already adjacent — attack, don't move
+
+      const step = entry && entry.prev;
+      if (step && !isMobBlocked(step.x, step.y) && !isCombatantBlocked(step.x, step.y)) {
+        mob.pos = step;
+        moved = true;
+      }
+      continue;
+    }
+
+    const neighbours = getOpenNeighbours(state.grid, mob.pos.x, mob.pos.y, state.cols, state.rows)
+      .filter(({ x, y }) => !isMobBlocked(x, y) && !isCombatantBlocked(x, y));
+    if (neighbours.length > 0) {
+      mob.pos = neighbours[Math.floor(Math.random() * neighbours.length)];
+      moved = true;
+    }
+  }
+
+  if (moved) render();
+}
+
 // Any mob standing next to the player or Nigel gets a free melee hit this
-// turn (mobs are stationary, so this is the only way they act) — 1d6, no
-// attack roll, auto-hit. A mob adjacent to both prefers the player.
+// turn — 1d6, no attack roll, auto-hit. Movement (chase/amble) happens in
+// moveMobs just before this; this only resolves the attack half. A mob
+// adjacent to both prefers the player.
 function resolveMobAttacks() {
   for (const mob of state.mobs) {
     if (state.gameOver) break; // a mob earlier in the array may have just finished the player off
