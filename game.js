@@ -397,6 +397,8 @@ function spawnNigel(isLich) {
     isLich,
     lightningBolt: null,
     healFx: null,
+    wanderStack: [],
+    deadEnds: new Set(),
   };
 }
 
@@ -1603,6 +1605,7 @@ function resolveNigelTurn(onDone) {
 
     if (fleeTo) {
       const wasSighted = nigel.sighted;
+      nigel.wanderStack = []; // breaks the wander backtrack path; deadEnds knowledge still holds
       nigel.pos = fleeTo;
       updateNigelSighting();
       if (wasSighted) logEvent(`${nigelName(nigel)} flees!`); // don't double up with the detection message on first sighting
@@ -1639,7 +1642,10 @@ function resolveNigelTurn(onDone) {
     if (nearestSensed) {
       const result = bfsFrom(state.grid, state.cols, state.rows, nearestSensed.pos);
       const entry = result.get(`${nigel.pos.x},${nigel.pos.y}`);
-      if (entry && entry.prev && !isMobBlocked(entry.prev.x, entry.prev.y)) nigel.pos = entry.prev;
+      if (entry && entry.prev && !isMobBlocked(entry.prev.x, entry.prev.y)) {
+        nigel.wanderStack = []; // breaks the wander backtrack path; deadEnds knowledge still holds
+        nigel.pos = entry.prev;
+      }
       updateNigelSighting();
       render();
       onDone();
@@ -1699,11 +1705,38 @@ function castNigelHeal(onDone) {
   startHealFxAnimation({ x: nigel.pos.x, y: nigel.pos.y }, onDone);
 }
 
+// Random DFS with backtracking: Nigel remembers dead ends he's fully
+// explored (deadEnds) and won't wander back into them, using wanderStack to
+// retrace his steps out one cell per turn when he runs out of fresh ground.
+// Both fields live on state.nigel and are only cleared by spawnNigel (new
+// maze) or a chase/flee excursion breaking the backtrack path.
 function wanderNigel() {
   const nigel = state.nigel;
-  const neighbours = getOpenNeighbours(state.grid, nigel.pos.x, nigel.pos.y, state.cols, state.rows);
+  const { x, y } = nigel.pos;
+  const key = `${x},${y}`;
+  const cameFrom = nigel.wanderStack[nigel.wanderStack.length - 1] || null;
+
+  const neighbours = getOpenNeighbours(state.grid, x, y, state.cols, state.rows);
   if (neighbours.length === 0) return;
-  nigel.pos = neighbours[Math.floor(Math.random() * neighbours.length)];
+
+  const candidates = neighbours.filter((n) => !nigel.deadEnds.has(`${n.x},${n.y}`));
+
+  if (candidates.length === 0) {
+    // Nowhere fresh to go from here — this cell is a dead end. Mark it and
+    // back out towards where he came from.
+    nigel.deadEnds.add(key);
+    const back = nigel.wanderStack.pop();
+    if (back) nigel.pos = back;
+    updateNigelSighting();
+    render();
+    return;
+  }
+
+  const forward = cameFrom ? candidates.filter((n) => !(n.x === cameFrom.x && n.y === cameFrom.y)) : candidates;
+  const pool = forward.length > 0 ? forward : candidates;
+
+  nigel.wanderStack.push({ x, y });
+  nigel.pos = pool[Math.floor(Math.random() * pool.length)];
   updateNigelSighting();
   render();
 }
