@@ -1722,11 +1722,18 @@ function wanderNigel() {
   const candidates = neighbours.filter((n) => !nigel.deadEnds.has(`${n.x},${n.y}`));
 
   if (candidates.length === 0) {
-    // Nowhere fresh to go from here — this cell is a dead end. Mark it and
-    // back out towards where he came from.
-    nigel.deadEnds.add(key);
     const back = nigel.wanderStack.pop();
-    if (back) nigel.pos = back;
+    if (back) {
+      // Nowhere fresh to go from here — this cell is a dead end. Mark it
+      // and back out towards where he came from.
+      nigel.deadEnds.add(key);
+      nigel.pos = back;
+    } else {
+      // Backed all the way out with nowhere left — he's explored every
+      // branch reachable from here. Forget it and start fresh rather than
+      // freezing in place forever.
+      nigel.deadEnds.clear();
+    }
     updateNigelSighting();
     render();
     return;
